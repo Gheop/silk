@@ -69,7 +69,11 @@ func Parse(d []byte) ([]Cmd, error) {
 	if s.eof() {
 		return nil, nil
 	}
-	var out []Cmd
+	// ~11 bytes per command is typical for real-world path data.
+	out := make([]Cmd, 0, len(d)/10+4)
+	var arena []float64 // shared backing for Args: one allocation per block
+	// First block sized to the input so tiny paths do not pay for a big one.
+	arenaBlock := min(4096, len(d)/5+8)
 	var implicit byte
 	sawComma := false
 	for !s.eof() {
@@ -92,7 +96,12 @@ func Parse(d []byte) ([]Cmd, error) {
 			return nil, errors.New("path: must begin with moveto")
 		}
 		n := arity(op)
-		args := make([]float64, n)
+		if len(arena) < n {
+			arena = make([]float64, max(arenaBlock, n))
+			arenaBlock = 4096
+		}
+		args := arena[:n:n]
+		arena = arena[n:]
 		for i := range n {
 			if i > 0 {
 				if err := s.commaWsp(); err != nil {

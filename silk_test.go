@@ -166,3 +166,20 @@ func BenchmarkOptimizeSmall(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkOptimizeManyPaths measures the many-small-paths shape (merge-heavy).
+func BenchmarkOptimizeManyPaths(b *testing.B) {
+	f := corpusDir + "/formats/E8out96g16.svg"
+	in, err := os.ReadFile(f)
+	if err != nil {
+		b.Skip(err)
+	}
+	opts := DefaultOptions()
+	b.SetBytes(int64(len(in)))
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := Optimize(in, opts); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

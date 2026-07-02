@@ -37,94 +37,103 @@ type merger struct {
 
 func (m *merger) mergeChildren(parent *dom.Node) {
 	i := 0
-	// accA carries the merged geometry's box across a chain of merges, so a
-	// chain costs one box per member instead of re-measuring the growing
-	// result each step.
-	var accA *bbox
 	for i < len(parent.Children)-1 {
-		a, b := parent.Children[i], parent.Children[i+1]
-		if merged, union := m.tryMerge(a, b, accA); merged {
+		a := parent.Children[i]
+		// Extend a chain from a as far as it goes, accumulating the pieces;
+		// the joined d is written once at the end, so an n-element chain
+		// costs O(total bytes) instead of re-concatenating per step.
+		var parts []string
+		var acc *bbox
+		for i < len(parent.Children)-1 {
+			b := parent.Children[i+1]
+			ok, union, dbNorm := m.canMerge(a, b, acc)
+			if !ok {
+				break
+			}
+			if parts == nil {
+				da, _ := a.AttrValue("d")
+				parts = []string{da}
+			}
+			parts = append(parts, dbNorm)
+			acc = union
 			parent.RemoveChild(b)
-			accA = union
-			continue // a may swallow the next sibling too
 		}
-		accA = nil
+		if parts != nil {
+			a.SetAttr("d", strings.Join(parts, ""))
+		}
 		i++
 	}
 }
 
-// emittedCmds predicts the geometry the path pass will emit for this
-// element. Merge decisions taken on the raw input would flip on the second
-// run, when the input is the rounded output; deciding on the emitted
-// geometry keeps them stable.
-func (m *merger) emittedCmds(el *dom.Node, d string, cs []path.Cmd) []path.Cmd {
-	p, noops := pathOptions(el, m.prec, m.docSafe)
-	out, ok := m.cache.optimize(d, p, noops)
-	if !ok {
-		return cs
-	}
-	parsed, err := path.Parse([]byte(out))
-	if err != nil {
-		return cs
-	}
-	return parsed
-}
-
-func (m *merger) tryMerge(a, b *dom.Node, accA *bbox) (bool, *bbox) {
+// canMerge decides whether b can fold into a (with acc carrying a's box
+// across a chain) and returns the union box plus b's path data normalized
+// for concatenation. It mutates nothing. All geometry comes from the path
+// cache: the merge decision is taken on what will actually be emitted, and
+// nothing is ever re-parsed.
+func (m *merger) canMerge(a, b *dom.Node, acc *bbox) (bool, *bbox, string) {
 	if a.Kind != dom.KindElement || b.Kind != dom.KindElement ||
 		localName(a.Name) != "path" || localName(b.Name) != "path" {
-		return false, nil
+		return false, nil, ""
 	}
 	if a.HasAttr("id") || b.HasAttr("id") {
-		return false, nil
+		return false, nil, ""
 	}
 	if !sameAttrsExceptD(a, b) {
-		return false, nil
+		return false, nil, ""
 	}
 	da, okA := a.AttrValue("d")
 	db, okB := b.AttrValue("d")
 	if !okA || !okB {
-		return false, nil
+		return false, nil, ""
 	}
-	csA, errA := path.Parse([]byte(da))
-	csB, errB := path.Parse([]byte(db))
-	if errA != nil || errB != nil || len(csA) == 0 || len(csB) == 0 {
-		return false, nil
+	dbNorm, okN := normalizeForJoin(db)
+	if !okN {
+		return false, nil, ""
 	}
 	inflate, ok := strokeReach(a)
 	if !ok {
-		return false, nil
+		return false, nil, ""
 	}
-	ba := accA
+	pA, noopsA := pathOptions(a, m.prec, m.docSafe)
+	pB, noopsB := pathOptions(b, m.prec, m.docSafe)
+	ba := acc
 	if ba == nil {
-		if box, bok := m.emittedBBox(a, da, csA); bok {
+		if box, bok := m.cache.emittedBBox(da, pA, noopsA); bok {
 			ba = &box
 		}
 	}
-	bb, okBB := m.emittedBBox(b, db, csB)
+	bb, okBB := m.cache.emittedBBox(db, pB, noopsB)
 	if ba == nil || !okBB || !disjoint(*ba, bb, inflate) {
-		return false, nil
+		return false, nil, ""
 	}
-	// A leading lowercase moveto is absolute by definition at the start of
-	// path data; after concatenation it must say so explicitly.
-	if csB[0].Op == 'm' {
-		csB[0].Op = 'M'
-	}
-	merged := path.Serialize(nil, append(csA, csB...), -1)
-	if _, err := path.Parse(merged); err != nil {
-		return false, nil
-	}
-	a.SetAttr("d", string(merged))
 	union := bbox{
 		min(ba.minX, bb.minX), min(ba.minY, bb.minY),
 		max(ba.maxX, bb.maxX), max(ba.maxY, bb.maxY),
 	}
-	return true, &union
+	return true, &union, dbNorm
 }
 
-// emittedBBox measures the geometry the path pass will emit for d.
-func (m *merger) emittedBBox(el *dom.Node, d string, cs []path.Cmd) (bbox, bool) {
-	return controlBBox(m.emittedCmds(el, d, cs))
+// normalizeForJoin prepares path data for concatenation after another path:
+// a leading lowercase moveto is absolute by definition at the start of path
+// data, so it must become explicit. The rewrite goes through a parse because
+// the moveto's implicit repeats are relative linetos and must stay that way
+// — a plain m->M text swap would turn them absolute. Only this (small) piece
+// is parsed; the accumulated left side never is, so chains stay linear.
+// Joining valid path data that starts with a moveto onto valid path data is
+// always valid: a command letter needs no separator.
+func normalizeForJoin(db string) (string, bool) {
+	cs, err := path.Parse([]byte(db))
+	if err != nil || len(cs) == 0 {
+		return "", false
+	}
+	if cs[0].Op == 'M' {
+		return db, true
+	}
+	if cs[0].Op != 'm' {
+		return "", false
+	}
+	cs[0].Op = 'M'
+	return string(path.Serialize(nil, cs, -1)), true
 }
 
 // blockedAttrs on either path always prevent merging: they depend on the

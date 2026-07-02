@@ -29,8 +29,10 @@ type pathCacheKey struct {
 }
 
 type pathCacheVal struct {
-	out string
-	ok  bool
+	out   string
+	ok    bool
+	box   bbox // control bbox of the emitted geometry
+	boxOK bool
 }
 
 func NewPathCache() *PathCache {
@@ -59,7 +61,10 @@ func (c *PathCache) optimize(d string, prec int, noops bool) (string, bool) {
 	for range 5 {
 		out, emitted := path.OptimizeEmitted(cs, path.Options{Precision: prec, RemoveNoops: noops})
 		if s := string(out); s == cur {
-			v := pathCacheVal{s, true}
+			// The emitted command list is in hand: measuring the bbox here
+			// costs one walk, and spares the merge pass any re-parsing.
+			box, boxOK := controlBBox(emitted)
+			v := pathCacheVal{s, true, box, boxOK}
 			c.store(key, v)
 			c.store(pathCacheKey{s, prec, noops}, v)
 			return s, true
@@ -70,8 +75,19 @@ func (c *PathCache) optimize(d string, prec int, noops bool) (string, bool) {
 	}
 	// No fixed point within the bound: leaving the data untouched is the
 	// only stable answer.
-	c.store(key, pathCacheVal{d, true})
+	box, boxOK := controlBBox(cs)
+	c.store(key, pathCacheVal{d, true, box, boxOK})
 	return d, true
+}
+
+// emittedBBox returns the control bbox of the geometry the path pass emits
+// for d, computing (and caching) it on demand.
+func (c *PathCache) emittedBBox(d string, prec int, noops bool) (bbox, bool) {
+	c.optimize(d, prec, noops)
+	c.mu.Lock()
+	v := c.m[pathCacheKey{d, prec, noops}]
+	c.mu.Unlock()
+	return v.box, v.ok && v.boxOK
 }
 
 func (c *PathCache) store(key pathCacheKey, v pathCacheVal) {

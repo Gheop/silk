@@ -26,7 +26,9 @@ func formatNumber(dst []byte, v float64, prec int) []byte {
 	// overhead. Skipping the second formatting halves the hot path.
 	abs := math.Abs(v)
 	if abs >= 1e-2 && abs < 1e5 {
-		if prec >= 0 && prec <= 15 {
+		// The scaled value must stay within exact int64/float64 integer
+		// range; at precision 15 a coordinate near 1e5 would overflow.
+		if prec >= 0 && prec <= 15 && abs*pow10[prec] < 9e15 {
 			// v is already on the 10^-prec grid; its exact decimal has at
 			// most prec fraction digits, and no shorter decimal exists
 			// within half an ulp, so integer formatting reproduces the
@@ -78,6 +80,68 @@ func quantize(v float64, prec int) float64 {
 		return 0 // formatNumber emits "0" for negative zero too
 	}
 	return r
+}
+
+// numShape describes the exact text formatNumber will emit for v at prec,
+// without emitting it. ok is false when the fast decimal path does not
+// apply; the caller must then really format.
+type numShape struct {
+	length    int
+	headMinus bool // first byte is '-'
+	headDot   bool // first non-sign byte is '.'
+	hasDot    bool // text contains '.' (it never contains 'e' on this path)
+}
+
+func numInfo(v float64, prec int) (numShape, bool) {
+	if prec < 0 || prec > 15 {
+		return numShape{}, false
+	}
+	p := pow10[prec]
+	r := math.Round(v*p) / p
+	if math.IsInf(r, 0) || math.IsNaN(r) {
+		return numShape{}, false
+	}
+	if r == 0 {
+		return numShape{length: 1}, true // "0"
+	}
+	abs := math.Abs(r)
+	if abs < 1e-2 || abs >= 1e5 || abs*p >= 9e15 {
+		return numShape{}, false
+	}
+	k := int64(math.Round(r * p))
+	neg := k < 0
+	if neg {
+		k = -k
+	}
+	nd, tz := 0, -1
+	for x := k; x > 0; x /= 10 {
+		if tz < 0 && x%10 != 0 {
+			tz = nd
+		}
+		nd++
+	}
+	s := numShape{headMinus: neg}
+	n := 0
+	if neg {
+		n++
+	}
+	switch {
+	case prec == 0:
+		n += nd
+	case nd > prec:
+		// Integer digits, then the trimmed fraction (the prec last digits).
+		n += nd - prec
+		if frac := prec - min(tz, prec); frac > 0 {
+			s.hasDot = true
+			n += 1 + frac
+		}
+	default:
+		// Pure fraction: ".", zero padding, then the trimmed digits.
+		s.headDot, s.hasDot = true, true
+		n += 1 + (prec - nd) + (nd - tz)
+	}
+	s.length = n
+	return s, true
 }
 
 // appendScaledDecimal formats k/10^prec in minimal decimal form.

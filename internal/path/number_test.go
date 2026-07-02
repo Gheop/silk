@@ -72,3 +72,43 @@ func TestQuantizeMatchesFormat(t *testing.T) {
 		}
 	}
 }
+
+// numInfo must describe formatNumber's output exactly whenever it claims to.
+func TestNumInfoMatchesFormat(t *testing.T) {
+	rng := []float64{0, 1, -1, .5, -.5, .01, -.01, .009, 99999.999, -99999.5,
+		1234.5678, .125, 100, -100, 10.01, .0999, 3, 33.3, 0.30000000000000004}
+	for _, prec := range []int{0, 1, 2, 3, 5, 9, 12, 15} {
+		for _, base := range rng {
+			for _, mul := range []float64{1, 3.7, 12.34, 0.313, 999.99} {
+				v := base * mul
+				s, ok := numInfo(v, prec)
+				if !ok {
+					continue
+				}
+				text := formatNumber(nil, v, prec)
+				if s.length != len(text) {
+					t.Fatalf("numInfo(%v,%d).length=%d, text %q (%d)", v, prec, s.length, text, len(text))
+				}
+				if s.headMinus != (text[0] == '-') {
+					t.Fatalf("numInfo(%v,%d).headMinus wrong for %q", v, prec, text)
+				}
+				headDot := text[0] == '.' || (text[0] == '-' && len(text) > 1 && text[1] == '.')
+				if s.headDot != headDot {
+					t.Fatalf("numInfo(%v,%d).headDot wrong for %q", v, prec, text)
+				}
+				hasDot := false
+				for _, c := range text {
+					if c == '.' {
+						hasDot = true
+					}
+					if c == 'e' {
+						t.Fatalf("fast path emitted exponent: %q", text)
+					}
+				}
+				if s.hasDot != hasDot {
+					t.Fatalf("numInfo(%v,%d).hasDot wrong for %q", v, prec, text)
+				}
+			}
+		}
+	}
+}

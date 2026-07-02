@@ -44,6 +44,13 @@ func run(cs []Cmd, o Options, collect bool) ([]byte, []Cmd) {
 		prec = -1 // beyond float64 decimal resolution: exact is both safer and shorter
 	}
 	st := state{o: o, prec: prec, tol: tolAt(prec), collect: collect}
+	// Pre-size the growth points: ~10 bytes per emitted command, one emitted
+	// entry per input command. Halves total allocation churn on big paths.
+	st.e.b = make([]byte, 0, len(cs)*10)
+	if collect {
+		st.emitted = make([]Cmd, 0, len(cs))
+		st.arenaBlock = min(4096, len(cs)*3+8)
+	}
 	for i, c := range cs {
 		// Removing or re-basing the command before a smooth curve would
 		// change that curve's reflected control point.
@@ -110,16 +117,19 @@ type state struct {
 	nextRefl  bool
 	nextClose bool
 
-	collect  bool // record the emitted command list
-	emitted  []Cmd
-	argArena []float64 // backing storage for emitted Args, allocated in blocks
+	collect    bool // record the emitted command list
+	emitted    []Cmd
+	argArena   []float64 // backing storage for emitted Args, allocated in blocks
+	arenaBlock int       // next arena block size, input-proportional at first
 
+	candBuf [6]cand // reused candidate storage: one live set at a time
 	scratch [6][]byte
 }
 
 func (st *state) arenaArgs(n int) []float64 {
 	if len(st.argArena) < n {
-		st.argArena = make([]float64, 4096)
+		st.argArena = make([]float64, max(st.arenaBlock, n))
+		st.arenaBlock = 4096
 	}
 	out := st.argArena[:n:n]
 	st.argArena = st.argArena[n:]
@@ -251,7 +261,7 @@ func (st *state) closePath() {
 		st.cx, st.cy = st.sx, st.sy
 		return
 	}
-	st.choose([]cand{{op: 'z', endX: st.esx, endY: st.esy}})
+	st.choose(append(st.candBuf[:0], cand{op: 'z', endX: st.esx, endY: st.esy}))
 	st.cx, st.cy = st.sx, st.sy
 	st.prevCubic, st.prevQuad = false, false
 	st.open = false
@@ -283,11 +293,12 @@ func (st *state) dropNoop(endX, endY float64, pts ...float64) bool {
 		return false
 	}
 	rx, ry := st.refCur()
-	qpts := make([]float64, 0, len(pts)+2)
-	for _, p := range append(pts, endX, endY) {
-		qpts = append(qpts, st.q(p))
+	for i := 0; i+1 < len(pts); i += 2 {
+		if math.Abs(st.q(pts[i])-rx) > st.tol || math.Abs(st.q(pts[i+1])-ry) > st.tol {
+			return false
+		}
 	}
-	if !near(st.tol, rx, ry, qpts...) {
+	if math.Abs(st.q(endX)-rx) > st.tol || math.Abs(st.q(endY)-ry) > st.tol {
 		return false
 	}
 	st.cx, st.cy = endX, endY
@@ -310,7 +321,7 @@ func (st *state) lineTo(x, y float64) {
 		endMask = 1<<0 | 1<<1
 		qe = func(v float64) float64 { return v }
 	}
-	cs := make([]cand, 0, 6)
+	cs := st.candBuf[:0]
 	// Eligibility compares quantized values: the second run sees the rounded
 	// output, so deciding on exact inputs would flip choices between runs
 	// and break idempotence. The tolerance is the local one: freezing the
@@ -380,7 +391,7 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 		rx, ry := st.reflC()
 		smoothOK = math.Abs(ql(c1x)-rx) <= tl && math.Abs(ql(c1y)-ry) <= tl
 	}
-	cs := make([]cand, 0, 4)
+	cs := st.candBuf[:0]
 	if smoothOK {
 		var m uint8
 		if et.exact {
@@ -441,7 +452,7 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 		qe = func(v float64) float64 { return v }
 	}
 	smoothOK := isSmoothIn || (math.Abs(ql(qx)-rx) <= tl && math.Abs(ql(qy)-ry) <= tl)
-	cs := make([]cand, 0, 4)
+	cs := st.candBuf[:0]
 	if smoothOK {
 		var m uint8
 		if et.exact {
@@ -570,15 +581,60 @@ func lowerBoundLen(args []float64) int {
 	return n
 }
 
-// choose serializes every candidate in the current emitter context, appends
-// the shortest (first wins ties), and advances the emitted state. Candidates
-// that provably cannot beat the current best are skipped without formatting.
+// candLen computes the exact byte length a candidate will occupy in the
+// current emitter context, plus the emitter state it leaves behind, without
+// formatting anything. ok is false when any argument needs the slow
+// formatting path; the caller then really encodes to measure.
+func (st *state) candLen(c *cand) (n int, lastKind byte, lastOpen bool, ok bool) {
+	kind, open := st.e.prevKind, st.e.prevOpen
+	if c.op != st.implicit || c.nargs == 0 {
+		n++
+		kind, open = 'l', false
+	}
+	arc := c.op|0x20 == 'a'
+	for i := range int(c.nargs) {
+		if arc && (i == 3 || i == 4) {
+			if kind == 'n' {
+				n++ // a digit right after a number would be absorbed by it
+			}
+			n++
+			kind = 'f'
+			continue
+		}
+		if c.exactMask&(1<<i) != 0 {
+			return 0, 0, false, false
+		}
+		s, fast := numInfo(c.args[i], c.prec)
+		if !fast {
+			return 0, 0, false, false
+		}
+		if kind == 'n' && !s.headMinus && !(s.headDot && open) {
+			n++
+		}
+		n += s.length
+		kind, open = 'n', s.hasDot
+	}
+	return n, kind, open, true
+}
+
+// choose measures every candidate in the current emitter context — by exact
+// arithmetic when possible, by really encoding otherwise — then appends only
+// the shortest (first wins ties) and advances the emitted state.
 func (st *state) choose(cs []cand) *cand {
 	best, bestLen := -1, int(^uint(0)>>1)
 	var bestKind byte
 	var bestOpen bool
+	bestEncoded := -1 // scratch index when the best had to be really encoded
 	for i := range cs {
 		if lowerBoundLen(cs[i].args[:cs[i].nargs]) >= bestLen {
+			continue
+		}
+		if n, kind, open, ok := st.candLen(&cs[i]); ok {
+			if n < bestLen {
+				best, bestLen = i, n
+				bestKind, bestOpen = kind, open
+				bestEncoded = -1
+			}
 			continue
 		}
 		e := emitter{b: st.scratch[i][:0], numBuf: st.e.numBuf, prevKind: st.e.prevKind, prevOpen: st.e.prevOpen}
@@ -588,10 +644,21 @@ func (st *state) choose(cs []cand) *cand {
 		if len(e.b) < bestLen {
 			best, bestLen = i, len(e.b)
 			bestKind, bestOpen = e.prevKind, e.prevOpen
+			bestEncoded = i
 		}
 	}
-	st.e.b = append(st.e.b, st.scratch[best]...)
-	st.e.prevKind, st.e.prevOpen = bestKind, bestOpen
+	if bestEncoded >= 0 {
+		st.e.b = append(st.e.b, st.scratch[bestEncoded]...)
+		st.e.prevKind, st.e.prevOpen = bestKind, bestOpen
+	} else {
+		mark := len(st.e.b)
+		encodeCand(&st.e, st.implicit, &cs[best], cs[best].prec)
+		if len(st.e.b)-mark != bestLen || st.e.prevKind != bestKind || st.e.prevOpen != bestOpen {
+			// candLen and the real encoder disagree: impossible by
+			// construction, but the encoder is the authority.
+			bestKind, bestOpen = st.e.prevKind, st.e.prevOpen
+		}
+	}
 	w := &cs[best]
 	st.implicit = nextImplicit(w.op)
 	st.ecx, st.ecy = w.endX, w.endY
