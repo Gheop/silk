@@ -75,14 +75,23 @@ rounding, minimal passes.
 
 Path data (`d` attributes): shortest-form numbers, minimal separators,
 absolute↔relative per command, shorthands (`H`/`V`/`S`/`T`, implicit
-repeats), removal of no-op segments and empty subpaths when provably
-invisible, precision rounding with drift-free error tracking (every delta is
-taken against the emitted point).
+repeats), flat curves rewritten as lines (control points inside the
+tolerance tube of the chord), collinear line runs folded, removal of no-op
+segments and empty subpaths when provably invisible, precision rounding
+with drift-free error tracking (every delta is taken against the emitted
+point).
 
 Structure: comment/metadata/editor-namespace removal (Inkscape, Illustrator,
-Sketch, …), insignificant whitespace, empty containers, group collapsing,
-transform-list flattening, merging of adjacent paths with identical
-attributes and provably disjoint geometry.
+Sketch, …), unreferenced definitions inside `<defs>`, insignificant
+whitespace (between elements and inside tags), empty containers, group
+collapsing, transform-list flattening, merging of adjacent paths with
+identical attributes and provably disjoint geometry.
+
+Styling: inline `style` becomes presentation attributes when no stylesheet
+could outrank them, declarations set to their initial value drop (with
+inheritance analysis), colors take their shortest spelling, and numeric
+attributes (shape geometry, `points`, opacities, stroke metrics) round to
+the configured precision.
 
 A reference graph (ids targeted by `url(#…)`, `href`, `aria-*`, stylesheet
 text) marks everything referenced as untouchable. A `<style>` element
@@ -152,6 +161,21 @@ Fuzzing: `go test -fuzz=FuzzOptimize .` exercises the whole optimizer;
 [resvg]: https://github.com/linebender/resvg
 
 ## Changelog
+
+### v0.2.0 — Styling passes, curve straightening, big speedups (2026-07-02)
+
+- New: inline styles convert to presentation attributes, default-valued
+  declarations drop, colors shorten, numeric attributes round.
+- New: flat curves become lines and collinear line runs fold, within the
+  same tolerance budget as coordinate rounding.
+- New: unreferenced `<defs>` entries and editor blobs behind DTD entities
+  (Illustrator `<i:pgf>`) are now found and removed.
+- Whole-corpus output is now smaller than svgo's total (63.6 % vs 64.6 % of
+  input); median gap narrowed to ~4.6 points with fidelity svgo does not
+  match.
+- 2-4× faster: allocation churn cut ~7×, losing encoding candidates are
+  costed arithmetically instead of being formatted, merge decisions reuse
+  cached geometry.
 
 ### v0.1.0 — Initial release (2026-07-02)
 

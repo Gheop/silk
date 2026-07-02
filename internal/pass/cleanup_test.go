@@ -33,9 +33,10 @@ func TestCleanup(t *testing.T) {
 		// Whitespace between elements collapses, text content survives.
 		{"<svg>\n  <g>\n    <path d=\"M0 0\"/>\n  </g>\n  <text> a <tspan> b </tspan></text>\n</svg>",
 			`<svg><g><path d="M0 0"/></g><text> a <tspan> b </tspan></text></svg>`},
-		// xml:space="preserve" protects whitespace below it.
-		{`<svg xml:space="preserve"><g> <path d="M0 0"/> </g></svg>`,
-			`<svg xml:space="preserve"><g> <path d="M0 0"/> </g></svg>`},
+		// xml:space="preserve" protects whitespace below it — as long as
+		// the document has text content at all (otherwise it goes).
+		{`<svg xml:space="preserve"><text>t</text><g> <path d="M0 0"/> </g></svg>`,
+			`<svg xml:space="preserve"><text>t</text><g> <path d="M0 0"/> </g></svg>`},
 		// Empty containers, recursively.
 		{`<svg><g><g></g><defs> </defs></g><path d="M0 0"/></svg>`,
 			`<svg><path d="M0 0"/></svg>`},
@@ -70,6 +71,25 @@ func TestRemoveUnreferencedDefs(t *testing.T) {
 		// A fully unreferenced defs empties out and disappears.
 		{`<svg><defs><clipPath id="c"><path d="M0 0h1"/></clipPath></defs><rect/></svg>`,
 			`<svg><rect/></svg>`},
+	}
+	for _, tc := range cases {
+		if got := runCleanup(t, tc.in); got != tc.want {
+			t.Errorf("Cleanup(%q)\n got: %q\nwant: %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestCanonicalizeTagsAndXMLSpace(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// Editor indentation inside tags collapses to single spaces.
+		{"<svg>\n  <path\n     fill=\"red\"\n     d=\"M0 0\"/>\n</svg>",
+			`<svg><path fill="red" d="M0 0"/></svg>`},
+		// xml:space goes when the document has no text content.
+		{`<svg xml:space="preserve"><g> <path d="M0 0"/> </g></svg>`,
+			`<svg><g><path d="M0 0"/></g></svg>`},
+		// With text content it stays, and protected whitespace survives.
+		{`<svg xml:space="preserve"><text> a </text><g> <path d="M0 0"/> </g></svg>`,
+			`<svg xml:space="preserve"><text> a </text><g> <path d="M0 0"/> </g></svg>`},
 	}
 	for _, tc := range cases {
 		if got := runCleanup(t, tc.in); got != tc.want {

@@ -62,3 +62,15 @@ func (e *emitter) number(v float64, prec int) {
 	e.prevKind = 'n'
 	e.prevOpen = bytes.IndexByte(t, '.') >= 0 || bytes.IndexByte(t, 'e') >= 0
 }
+
+// AppendNumberList appends vals in minimal form with path-style separator
+// elision: a sign always separates, and a dot separates from a previous
+// number that already contains one. Exported for attribute lists (points,
+// stroke-dasharray) that share the number grammar.
+func AppendNumberList(dst []byte, vals []float64, prec int) []byte {
+	e := emitter{b: dst}
+	for _, v := range vals {
+		e.number(v, prec)
+	}
+	return e.b
+}

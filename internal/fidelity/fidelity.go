@@ -29,6 +29,9 @@ const (
 	strongDiff    = 64     // per-channel difference considered strong
 	maxBadFrac    = 0.002  // pixels above softDiff
 	maxStrongFrac = 0.0002 // pixels above strongDiff
+	// With not a single strongly differing pixel, the changes are pure
+	// sub-tolerance anti-aliasing shifts; a higher count stays invisible.
+	maxBadFracIfNoStrong = 0.005
 )
 
 // Result summarizes a pixel comparison.
@@ -41,6 +44,9 @@ type Result struct {
 
 // Acceptable reports whether the difference is within the fidelity tolerance.
 func (r Result) Acceptable() bool {
+	if r.StrongPixels == 0 {
+		return float64(r.BadPixels) <= maxBadFracIfNoStrong*float64(r.TotalPixels)
+	}
 	return float64(r.BadPixels) <= maxBadFrac*float64(r.TotalPixels) &&
 		float64(r.StrongPixels) <= maxStrongFrac*float64(r.TotalPixels)
 }

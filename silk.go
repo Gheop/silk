@@ -88,6 +88,7 @@ func optimizeOnce(svg []byte, opts Options, cache *pass.PathCache) ([]byte, erro
 	}
 	refs := pass.Analyze(doc)
 	pass.Cleanup(doc, refs)
+	pass.OptimizePresentation(doc, refs, pathPrecision(opts))
 	pass.CollapseGroups(doc, refs)
 	pass.ConvertTransforms(doc, transformPrecision(opts))
 	pass.PrewarmPaths(doc, pathPrecision(opts), cache)

@@ -5,6 +5,8 @@
 // and the output deterministic.
 package dom
 
+import "bytes"
+
 // Kind discriminates node types in the tree.
 type Kind uint8
 
@@ -49,10 +51,11 @@ type Node struct {
 	// SelfClosing records whether the element used <name/> form.
 	SelfClosing bool
 
-	raw      []byte // leaf kinds: the complete verbatim token
-	rawStart []byte // element: verbatim start tag, "<name ...>" or "<name.../>"
-	rawEnd   []byte // element: verbatim end tag, nil when self-closing
-	modified bool   // start tag must be re-serialized canonically
+	raw       []byte // leaf kinds: the complete verbatim token
+	rawStart  []byte // element: verbatim start tag, "<name ...>" or "<name.../>"
+	rawEnd    []byte // element: verbatim end tag, nil when self-closing
+	modified  bool   // start tag must be re-serialized canonically
+	canonical bool   // canonical re-serialization also normalizes attr spacing
 }
 
 // Raw returns the verbatim input bytes of a leaf node (text, comment, CDATA,
@@ -136,6 +139,43 @@ func (n *Node) ReplaceWithChildren() {
 			n.Children = nil
 			return
 		}
+	}
+}
+
+// CanonicalizeStartTag re-serializes the start tag with single-space
+// attribute separation when the original spelling wastes bytes (editor
+// indentation inside tags). Inter-attribute whitespace is not significant in
+// XML, so the document is equivalent.
+func (n *Node) CanonicalizeStartTag() {
+	if n.Kind != KindElement || n.modified {
+		return
+	}
+	for i := range n.Attrs {
+		raw := n.Attrs[i].raw
+		if len(raw) == 0 {
+			continue
+		}
+		wasted := raw[0] == '\n' || raw[0] == '\t' || raw[0] == '\r' ||
+			(len(raw) > 1 && raw[0] == ' ' && (raw[1] == ' ' || raw[1] == '\t' || raw[1] == '\n' || raw[1] == '\r'))
+		if !wasted {
+			for j := 1; j < len(raw); j++ {
+				if raw[j] == '\n' || raw[j] == '\t' || raw[j] == '\r' {
+					wasted = true
+					break
+				}
+			}
+		}
+		if wasted {
+			n.modified = true
+			n.canonical = true
+			return
+		}
+	}
+	// The tag itself may hold whitespace before '>' or between name and the
+	// first attribute even with no attributes at all.
+	if bytes.ContainsAny(n.rawStart, "\n\t\r") {
+		n.modified = true
+		n.canonical = true
 	}
 }
 

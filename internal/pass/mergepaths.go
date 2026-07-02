@@ -94,15 +94,15 @@ func (m *merger) canMerge(a, b *dom.Node, acc *bbox) (bool, *bbox, string) {
 	if !ok {
 		return false, nil, ""
 	}
-	pA, noopsA := pathOptions(a, m.prec, m.docSafe)
-	pB, noopsB := pathOptions(b, m.prec, m.docSafe)
+	pA, noopsA, colA := pathOptions(a, m.prec, m.docSafe)
+	pB, noopsB, colB := pathOptions(b, m.prec, m.docSafe)
 	ba := acc
 	if ba == nil {
-		if box, bok := m.cache.emittedBBox(da, pA, noopsA); bok {
+		if box, bok := m.cache.emittedBBox(da, pA, noopsA, colA); bok {
 			ba = &box
 		}
 	}
-	bb, okBB := m.cache.emittedBBox(db, pB, noopsB)
+	bb, okBB := m.cache.emittedBBox(db, pB, noopsB, colB)
 	if ba == nil || !okBB || !disjoint(*ba, bb, inflate) {
 		return false, nil, ""
 	}

@@ -30,10 +30,39 @@ var editorNamespaceURIs = []string{
 // insignificant whitespace, and empty containers.
 func Cleanup(doc *dom.Node, refs *Refs) {
 	editorPrefixes := collectEditorPrefixes(doc)
+	stripUselessXMLSpace(doc)
 	removeInert(doc, refs, editorPrefixes)
 	stripEditorAttrsAndXmlns(doc, editorPrefixes)
 	removeUnreferencedDefs(doc, refs)
 	removeEmptyContainers(doc, refs)
+	doc.Walk(func(n *dom.Node) bool {
+		if n.Kind == dom.KindElement {
+			n.CanonicalizeStartTag()
+		}
+		return true
+	})
+}
+
+// stripUselessXMLSpace removes xml:space attributes from documents with no
+// text-bearing content: the attribute only affects text layout, and editors
+// set it on the root out of habit, blocking whitespace cleanup.
+func stripUselessXMLSpace(doc *dom.Node) {
+	hasText := false
+	doc.Walk(func(n *dom.Node) bool {
+		if n.Kind == dom.KindElement && textishElements[localName(n.Name)] {
+			hasText = true
+		}
+		return !hasText
+	})
+	if hasText {
+		return
+	}
+	doc.Walk(func(n *dom.Node) bool {
+		if n.Kind == dom.KindElement {
+			n.RemoveAttr("xml:space")
+		}
+		return true
+	})
 }
 
 // disposableDefs are element types inside <defs> that can only take effect

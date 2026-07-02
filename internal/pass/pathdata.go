@@ -23,9 +23,10 @@ type PathCache struct {
 }
 
 type pathCacheKey struct {
-	d     string
-	prec  int
-	noops bool
+	d         string
+	prec      int
+	noops     bool
+	collinear bool
 }
 
 type pathCacheVal struct {
@@ -44,8 +45,8 @@ func NewPathCache() *PathCache {
 // changes nothing. ok is false when the path data does not parse. Both the
 // input and the fixed point are cached, which makes the global pipeline
 // iterations nearly free.
-func (c *PathCache) optimize(d string, prec int, noops bool) (string, bool) {
-	key := pathCacheKey{d, prec, noops}
+func (c *PathCache) optimize(d string, prec int, noops, collinear bool) (string, bool) {
+	key := pathCacheKey{d, prec, noops, collinear}
 	c.mu.Lock()
 	v, hit := c.m[key]
 	c.mu.Unlock()
@@ -59,14 +60,14 @@ func (c *PathCache) optimize(d string, prec int, noops bool) (string, bool) {
 	}
 	cur := d
 	for range 5 {
-		out, emitted := path.OptimizeEmitted(cs, path.Options{Precision: prec, RemoveNoops: noops})
+		out, emitted := path.OptimizeEmitted(cs, path.Options{Precision: prec, RemoveNoops: noops, MergeCollinear: collinear})
 		if s := string(out); s == cur {
 			// The emitted command list is in hand: measuring the bbox here
 			// costs one walk, and spares the merge pass any re-parsing.
 			box, boxOK := controlBBox(emitted)
 			v := pathCacheVal{s, true, box, boxOK}
 			c.store(key, v)
-			c.store(pathCacheKey{s, prec, noops}, v)
+			c.store(pathCacheKey{s, prec, noops, collinear}, v)
 			return s, true
 		} else {
 			cur = s
@@ -82,10 +83,10 @@ func (c *PathCache) optimize(d string, prec int, noops bool) (string, bool) {
 
 // emittedBBox returns the control bbox of the geometry the path pass emits
 // for d, computing (and caching) it on demand.
-func (c *PathCache) emittedBBox(d string, prec int, noops bool) (bbox, bool) {
-	c.optimize(d, prec, noops)
+func (c *PathCache) emittedBBox(d string, prec int, noops, collinear bool) (bbox, bool) {
+	c.optimize(d, prec, noops, collinear)
 	c.mu.Lock()
-	v := c.m[pathCacheKey{d, prec, noops}]
+	v := c.m[pathCacheKey{d, prec, noops, collinear}]
 	c.mu.Unlock()
 	return v.box, v.ok && v.boxOK
 }
@@ -102,9 +103,10 @@ func (c *PathCache) store(key pathCacheKey, v pathCacheVal) {
 func PrewarmPaths(doc *dom.Node, prec int, cache *PathCache) {
 	docSafe := noopSafeDoc(doc)
 	type job struct {
-		d     string
-		prec  int
-		noops bool
+		d         string
+		prec      int
+		noops     bool
+		collinear bool
 	}
 	var jobs []job
 	seen := map[pathCacheKey]bool{}
@@ -116,17 +118,17 @@ func PrewarmPaths(doc *dom.Node, prec int, cache *PathCache) {
 		if !ok {
 			return true
 		}
-		p, noops := pathOptions(n, prec, docSafe)
-		key := pathCacheKey{d, p, noops}
+		p, noops, collinear := pathOptions(n, prec, docSafe)
+		key := pathCacheKey{d, p, noops, collinear}
 		if !seen[key] {
 			seen[key] = true
-			jobs = append(jobs, job{d, p, noops})
+			jobs = append(jobs, job{d, p, noops, collinear})
 		}
 		return true
 	})
 	if len(jobs) < 2 {
 		for _, j := range jobs {
-			cache.optimize(j.d, j.prec, j.noops)
+			cache.optimize(j.d, j.prec, j.noops, j.collinear)
 		}
 		return
 	}
@@ -142,7 +144,7 @@ func PrewarmPaths(doc *dom.Node, prec int, cache *PathCache) {
 		go func() {
 			defer wg.Done()
 			for j := range next {
-				cache.optimize(j.d, j.prec, j.noops)
+				cache.optimize(j.d, j.prec, j.noops, j.collinear)
 			}
 		}()
 	}
@@ -150,15 +152,34 @@ func PrewarmPaths(doc *dom.Node, prec int, cache *PathCache) {
 }
 
 // pathOptions resolves the effective options for one path element.
-func pathOptions(n *dom.Node, prec int, docSafe bool) (int, bool) {
+func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear bool) {
 	if underFilter(n) {
 		// A filter's primitives sample relative to the geometry, so segment
-		// removal (which can change the tight bbox) stays off; plain
-		// coordinate rounding measures within tolerance even through
-		// feTurbulence on the corpus.
-		return prec, false
+		// removal and vertex merging (which can change the tight bbox) stay
+		// off; plain coordinate rounding measures within tolerance even
+		// through feTurbulence on the corpus.
+		return prec, false, false
 	}
-	return prec, docSafe && noopSafeElement(n)
+	return prec, docSafe && noopSafeElement(n), docSafe && markerSafeElement(n)
+}
+
+// markerSafeElement reports whether the element provably carries no markers:
+// merging collinear vertices only ever shows through markers.
+func markerSafeElement(n *dom.Node) bool {
+	for e := n; e != nil && e.Kind == dom.KindElement; e = e.Parent {
+		for i := range e.Attrs {
+			a := &e.Attrs[i]
+			switch a.Name {
+			case "marker", "marker-start", "marker-mid", "marker-end":
+				return false
+			case "style":
+				if v, ok := a.Value(); !ok || strings.Contains(v, "marker") {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 // OptimizePaths rewrites every d attribute whose optimized encoding is
@@ -173,8 +194,8 @@ func OptimizePaths(doc *dom.Node, prec int, cache *PathCache) {
 		if !ok {
 			return true
 		}
-		p, noops := pathOptions(n, prec, docSafe)
-		out, ok := cache.optimize(d, p, noops)
+		p, noops, collinear := pathOptions(n, prec, docSafe)
+		out, ok := cache.optimize(d, p, noops, collinear)
 		// An empty result is only valid when the input path was itself
 		// empty of any drawing.
 		if ok && len(out) > 0 && len(out) < len(d) {

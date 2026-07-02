@@ -44,8 +44,17 @@ func writeStartTag(b *bytes.Buffer, n *Node) {
 	for i := range n.Attrs {
 		a := &n.Attrs[i]
 		if a.raw != nil && !a.modified {
-			b.Write(a.raw)
-			continue
+			if !n.canonical {
+				b.Write(a.raw)
+				continue
+			}
+			if a.opaque {
+				// The exact spelling matters (unresolved entities): keep the
+				// raw bytes, collapsing only the leading whitespace.
+				b.WriteByte(' ')
+				b.Write(bytes.TrimLeft(a.raw, " \t\r\n"))
+				continue
+			}
 		}
 		b.WriteByte(' ')
 		b.WriteString(a.Name)

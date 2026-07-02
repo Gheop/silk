@@ -79,10 +79,11 @@ func TestOptimizeNoopRemoval(t *testing.T) {
 		{"M0 0L5 5zz", on, "M0 0l5 5z"},
 		// A zero-length segment before a smooth command must stay: removing
 		// it would change the smooth command's reflected control point.
+		// (Both flat curves legitimately become lines here.)
 		{
 			"M0 0C1 1 2 2 3 3L3 3S5 5 6 6",
 			on,
-			"M0 0c1 1 2 2 3 3h0s2 2 3 3",
+			"M0 0l3 3h0l3 3",
 		},
 		// Zero-length curve drops when nothing reflects off it.
 		{"M0 0C0 0 0 0 0 0L5 5", on, "M0 0l5 5"},
@@ -103,7 +104,7 @@ func TestOptimizeExactGeometry(t *testing.T) {
 		"M0 0C10 10 20 10 30 0C40 -10 50 -10 60 0S80 10 90 0",
 		"M0 0Q5 5 10 0Q15 -5 20 0T30 0t5 5",
 		"M0 0A5 5 30 1 0 10 10a2 2 0 015 5",
-		"M.5.5l.1.1c.1.1 .2.2 .3.3",
+		"M.5.5l.1.1c.1.2 .2.2 .3.3",
 		"M1e3 1e-3L2e3 5",
 	}
 	for _, p := range paths {
@@ -223,4 +224,55 @@ func trace(cs []Cmd) [][2]float64 {
 		out = append(out, [2]float64{cx, cy})
 	}
 	return out
+}
+
+func TestStraightCurvesToLines(t *testing.T) {
+	cases := []struct {
+		in   string
+		o    Options
+		want string
+	}{
+		// Control points on the chord: the curve is the segment.
+		{"M0 0C1 1 2 2 3 3", exact, "M0 0l3 3"},
+		{"M0 0Q5 0 10 0", exact, "M0 0h10"},
+		// Slightly off the chord but within tolerance at precision 2.
+		{"M0 0C1 0.001 2 -0.001 3 0", Options{Precision: 2}, "M0 0h3"},
+		// Genuinely curved stays a curve.
+		{"M0 0C0 5 3 5 3 0", exact, "M0 0c0 5 3 5 3 0"},
+		// Controls beyond the endpoints: loops back, not straight.
+		{"M0 0C-5 0 8 0 3 0", exact, "M0 0c-5 0 8 0 3 0"},
+		// A smooth follower blocks the rewrite of its predecessor (the
+		// reflected control would vanish); the smooth itself, also inside
+		// the tube, becomes a line.
+		{"M0 0C1 1 2 2 3 3S5 5 6 6", exact, "M0 0c1 1 2 2 3 3l3 3"},
+	}
+	for _, tc := range cases {
+		if got := opt(t, tc.in, tc.o); got != tc.want {
+			t.Errorf("straight(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestCollinearLineMerge(t *testing.T) {
+	on := Options{Precision: -1, MergeCollinear: true}
+	cases := []struct {
+		in   string
+		o    Options
+		want string
+	}{
+		{"M0 0l1 0l2 0l3 0", on, "M0 0h6"},
+		{"M0 0h1h2v3v4", on, "M0 0h3v7"},
+		// Not collinear: kept.
+		{"M0 0l1 0l0 1", on, "M0 0h1v1"},
+		// Reversal is not collinear (the stroke doubles back); the two
+		// segments survive as an implicit h repeat.
+		{"M0 0l5 0l-2 0", on, "M0 0h5-2"},
+		// Gate off: nothing merges.
+		{"M0 0l1 0l2 0", exact, "M0 0h1 2"},
+	}
+	for _, tc := range cases {
+		if got := opt(t, tc.in, tc.o); got != tc.want {
+			t.Errorf("collinear(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
 }

@@ -13,6 +13,12 @@ type Options struct {
 	// Only safe when the path cannot be stroked or carry markers; the caller
 	// decides from document context.
 	RemoveNoops bool
+
+	// MergeCollinear enables folding runs of collinear line segments into
+	// one. The fill and stroke are identical (same trace, same length for
+	// dashes); only markers attach to the removed vertices, so the caller
+	// enables this when the path cannot carry markers.
+	MergeCollinear bool
 }
 
 // Optimize re-encodes a command list in its shortest safe form.
@@ -42,6 +48,12 @@ func run(cs []Cmd, o Options, collect bool) ([]byte, []Cmd) {
 	prec := o.Precision
 	if prec > 15 {
 		prec = -1 // beyond float64 decimal resolution: exact is both safer and shorter
+	}
+	if o.MergeCollinear {
+		// Straightening a chain moves its whole edge coherently — more
+		// visible than pointwise rounding — so the tube is half the rounding
+		// tolerance.
+		cs = mergeCollinear(cs, tolAt(prec)/2)
 	}
 	st := state{o: o, prec: prec, tol: tolAt(prec), collect: collect}
 	// Pre-size the growth points: ~10 bytes per emitted command, one emitted
@@ -163,6 +175,143 @@ func localPrec(prec int, vecs ...float64) int {
 		}
 	}
 	return min(out, 12)
+}
+
+// withinChordTube reports whether p lies within tolerance of segment [a, b],
+// with its projection inside the segment. A curve whose control points
+// satisfy this lies in the same tube (convex-hull property), so replacing it
+// with the segment stays within the rounding tolerance. The tube is also
+// capped at 1% of the chord length: a tiny curve can be genuinely curved
+// well inside the absolute tolerance.
+func withinChordTube(px, py, ax, ay, bx, by, tol float64) bool {
+	dx, dy := bx-ax, by-ay
+	l2 := dx*dx + dy*dy
+	if l2 == 0 {
+		return px == ax && py == ay
+	}
+	t := ((px-ax)*dx + (py-ay)*dy) / l2
+	if t < 0 || t > 1 {
+		return false
+	}
+	if rel := 0.01 * math.Sqrt(l2); rel < tol {
+		tol = rel
+	}
+	ex, ey := ax+t*dx-px, ay+t*dy-py
+	return ex*ex+ey*ey <= tol*tol
+}
+
+// mergeCollinear folds runs of line segments whose intermediate vertices all
+// lie inside the tolerance tube of the run's chord, walking forward
+// monotonically. Geometry, stroke trace, and dash lengths are preserved;
+// only the intermediate vertices disappear.
+func mergeCollinear(cs []Cmd, tol float64) []Cmd {
+	out := make([]Cmd, 0, len(cs))
+	var cx, cy float64
+	var runX, runY float64 // anchor of the current line run
+	var spX, spY float64   // subpath start, for closepath
+	var mids [][2]float64  // intermediate vertices of the run
+	inRun := false
+
+	flush := func(endX, endY float64) {
+		out = append(out, Cmd{Op: 'L', Args: []float64{endX, endY}})
+	}
+	endRun := func() {
+		if inRun {
+			flush(cx, cy)
+			inRun = false
+			mids = mids[:0]
+		}
+	}
+
+	for _, c := range cs {
+		rel := c.Op >= 'a'
+		var nx, ny float64
+		isLine := false
+		switch c.Op | 0x20 {
+		case 'l':
+			isLine = true
+			nx, ny = c.Args[0], c.Args[1]
+			if rel {
+				nx, ny = cx+nx, cy+ny
+			}
+		case 'h':
+			isLine = true
+			nx, ny = c.Args[0], cy
+			if rel {
+				nx = cx + c.Args[0]
+			}
+		case 'v':
+			isLine = true
+			nx, ny = cx, c.Args[0]
+			if rel {
+				ny = cy + c.Args[0]
+			}
+		}
+		if !isLine {
+			endRun()
+			out = append(out, c)
+			// Track the current point across non-line commands.
+			switch c.Op | 0x20 {
+			case 'm':
+				if rel {
+					cx, cy = cx+c.Args[0], cy+c.Args[1]
+				} else {
+					cx, cy = c.Args[0], c.Args[1]
+				}
+				spX, spY = cx, cy
+			case 'z':
+				cx, cy = spX, spY
+			case 'c', 's', 'q', 't', 'a':
+				n := len(c.Args)
+				x, y := c.Args[n-2], c.Args[n-1]
+				if rel {
+					x, y = cx+x, cy+y
+				}
+				cx, cy = x, y
+			}
+			continue
+		}
+		if inRun && extendsRun(runX, runY, mids, cx, cy, nx, ny, tol) {
+			mids = append(mids, [2]float64{cx, cy})
+			cx, cy = nx, ny
+			continue
+		}
+		endRun()
+		runX, runY = cx, cy
+		inRun = true
+		cx, cy = nx, ny
+	}
+	endRun()
+	return out
+}
+
+// extendsRun checks that every intermediate vertex (mids plus the current
+// endpoint) sits inside the tube of [start, candidate] with monotonically
+// increasing projection: no doubling back, no pivoted tube escaping.
+func extendsRun(sx, sy float64, mids [][2]float64, cx, cy, nx, ny, tol float64) bool {
+	dx, dy := nx-sx, ny-sy
+	l2 := dx*dx + dy*dy
+	if l2 == 0 {
+		return false
+	}
+	prevT := 0.0
+	check := func(px, py float64) bool {
+		if !withinChordTube(px, py, sx, sy, nx, ny, tol) {
+			return false
+		}
+		t := ((px-sx)*dx + (py-sy)*dy) / l2
+		if t < prevT {
+			return false
+		}
+		prevT = t
+		return true
+	}
+	for _, m := range mids {
+		if !check(m[0], m[1]) {
+			return false
+		}
+	}
+	return check(cx, cy)
 }
 
 // endpoint is where a command must land in emitted space.
@@ -373,6 +522,15 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	if st.dropNoop(x, y, c1x, c1y, c2x, c2y) {
 		return
 	}
+	// A curve whose control points sit inside the tolerance tube of its
+	// chord is the segment, to within the same error budget as rounding —
+	// unless a smooth follower needs the control point that would vanish.
+	if !st.nextRefl &&
+		withinChordTube(c1x, c1y, st.cx, st.cy, x, y, st.tol) &&
+		withinChordTube(c2x, c2y, st.cx, st.cy, x, y, st.tol) {
+		st.lineTo(x, y)
+		return
+	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
 	lp := localPrec(st.prec,
@@ -437,6 +595,10 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 		qx, qy = rx, ry
 	}
 	if st.dropNoop(x, y, qx, qy) {
+		return
+	}
+	if !st.nextRefl && withinChordTube(qx, qy, st.cx, st.cy, x, y, st.tol) {
+		st.lineTo(x, y)
 		return
 	}
 	st.flushPending()
