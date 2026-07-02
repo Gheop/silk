@@ -4,6 +4,8 @@
 package silk
 
 import (
+	"bytes"
+
 	"github.com/Gheop/silk/internal/dom"
 	"github.com/Gheop/silk/internal/pass"
 )
@@ -44,14 +46,38 @@ func DefaultOptions() Options {
 // On unparseable input it returns (nil, error) so the caller can fall back
 // to its own minifier.
 func Optimize(svg []byte, opts Options) ([]byte, error) {
+	// Idempotence requires a byte fixed point: some decisions (shorthand
+	// eligibility, merge safety) are threshold-sensitive and could otherwise
+	// flip when re-run on their own output. The pipeline reruns until the
+	// bytes stabilize; Multipass only raises how many shrinking iterations
+	// are allowed before that point.
+	bound := 4
+	if opts.Multipass {
+		bound = 8
+		if opts.MaxPasses > 0 {
+			bound = opts.MaxPasses
+		}
+	}
 	out, err := optimizeOnce(svg, opts)
 	if err != nil {
 		return nil, err
 	}
-	if len(out) >= len(svg) {
-		return clone(svg), nil
+	for range bound {
+		next, err := optimizeOnce(out, opts)
+		if err != nil {
+			break
+		}
+		if bytes.Equal(next, out) {
+			if len(out) >= len(svg) {
+				return clone(svg), nil
+			}
+			return out, nil
+		}
+		out = next
 	}
-	return out, nil
+	// No fixed point within the bound: the input is the only answer that is
+	// both safe and idempotent.
+	return clone(svg), nil
 }
 
 func optimizeOnce(svg []byte, opts Options) ([]byte, error) {
@@ -59,6 +85,11 @@ func optimizeOnce(svg []byte, opts Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	refs := pass.Analyze(doc)
+	pass.Cleanup(doc, refs)
+	pass.CollapseGroups(doc, refs)
+	pass.ConvertTransforms(doc, transformPrecision(opts))
+	pass.MergePaths(doc, refs, pathPrecision(opts))
 	pass.OptimizePaths(doc, pathPrecision(opts))
 	return dom.Serialize(doc), nil
 }
@@ -70,6 +101,17 @@ func pathPrecision(opts Options) int {
 		return -1
 	}
 	return opts.Precision
+}
+
+// transformPrecision only ever rounds transforms when explicitly asked to.
+// Rounding a group translation shifts entire subtrees coherently, which
+// sub-pixel patterns (fine hatching) turn into visible moiré; unlike path
+// coordinates there is no content-local way to bound that effect.
+func transformPrecision(opts Options) int {
+	if opts.TransformPrecision > 0 {
+		return opts.TransformPrecision
+	}
+	return -1
 }
 
 func clone(b []byte) []byte {

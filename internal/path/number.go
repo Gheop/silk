@@ -72,3 +72,10 @@ func compactExponent(e []byte) []byte {
 	}
 	return append(out, exp...)
 }
+
+// FormatNumber appends the shortest textual form of v, rounding to prec
+// decimals when prec >= 0. Exported for the transform pass, which shares the
+// number-minimization rules.
+func FormatNumber(dst []byte, v float64, prec int) []byte {
+	return formatNumber(dst, v, prec)
+}
