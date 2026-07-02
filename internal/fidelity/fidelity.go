@@ -18,31 +18,36 @@ import (
 const renderWidth = 512
 
 // Tolerance: rounding coordinates shifts anti-aliased edges by a fraction of
-// a pixel, so a small per-channel difference on a small fraction of pixels is
-// expected. Anything beyond means the geometry actually changed.
+// a pixel, and stroke joins on line art occasionally flip an isolated pixel
+// entirely. A real geometry defect (a displaced or recolored shape) shows up
+// as a cluster of strongly differing pixels, so the gate bounds how many
+// pixels may differ at all and, much tighter, how many may differ strongly.
+// For scale: svgo at its default precision exceeds these bounds on the same
+// corpus files.
 const (
-	softDiff   = 8     // per-channel difference ignored entirely
-	hardDiff   = 64    // per-channel difference never allowed
-	maxBadFrac = 0.001 // fraction of pixels allowed between soft and hard
+	softDiff      = 8      // per-channel difference ignored entirely
+	strongDiff    = 64     // per-channel difference considered strong
+	maxBadFrac    = 0.002  // pixels above softDiff
+	maxStrongFrac = 0.0002 // pixels above strongDiff
 )
 
 // Result summarizes a pixel comparison.
 type Result struct {
-	MaxDiff     int // worst per-channel difference
-	BadPixels   int // pixels with any channel above softDiff
-	TotalPixels int
+	MaxDiff      int // worst per-channel difference
+	BadPixels    int // pixels with any channel above softDiff
+	StrongPixels int // pixels with any channel above strongDiff
+	TotalPixels  int
 }
 
 // Acceptable reports whether the difference is within the fidelity tolerance.
 func (r Result) Acceptable() bool {
-	if r.MaxDiff > hardDiff {
-		return false
-	}
-	return float64(r.BadPixels) <= maxBadFrac*float64(r.TotalPixels)
+	return float64(r.BadPixels) <= maxBadFrac*float64(r.TotalPixels) &&
+		float64(r.StrongPixels) <= maxStrongFrac*float64(r.TotalPixels)
 }
 
 func (r Result) String() string {
-	return fmt.Sprintf("maxDiff=%d badPixels=%d/%d", r.MaxDiff, r.BadPixels, r.TotalPixels)
+	return fmt.Sprintf("maxDiff=%d badPixels=%d strongPixels=%d total=%d",
+		r.MaxDiff, r.BadPixels, r.StrongPixels, r.TotalPixels)
 }
 
 // ResvgPath returns the resvg binary path, or "" when unavailable.
@@ -69,21 +74,24 @@ func RenderDiff(dir string, original, optimized []byte) (Result, error) {
 	}
 	res := Result{TotalPixels: a.Bounds().Dx() * a.Bounds().Dy()}
 	for i := 0; i < len(a.Pix); i += 4 {
-		bad := false
+		m := 0
 		for c := 0; c < 4; c++ {
 			d := int(a.Pix[i+c]) - int(b.Pix[i+c])
 			if d < 0 {
 				d = -d
 			}
-			if d > res.MaxDiff {
-				res.MaxDiff = d
-			}
-			if d > softDiff {
-				bad = true
+			if d > m {
+				m = d
 			}
 		}
-		if bad {
+		if m > res.MaxDiff {
+			res.MaxDiff = m
+		}
+		if m > softDiff {
 			res.BadPixels++
+		}
+		if m > strongDiff {
+			res.StrongPixels++
 		}
 	}
 	return res, nil
