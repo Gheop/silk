@@ -10,7 +10,7 @@ test:
     - go vet ./...
     - go test ./...
 
-image:
+release-image:
   stage: release
   image: docker:27
   services: [docker:27-dind]
