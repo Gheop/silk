@@ -110,42 +110,42 @@ after optimization, lower is better.
 
 | File | Input | silk | svgo |
 |---|---:|---:|---:|
-| CrystalTreeofLife_SVG.svg | 592 KiB | **12.2 %** | 11.0 % |
-| 2024-08-17…ReconstHisto-d.svg | 1.6 MiB | 57.4 % | 43.4 % |
-| 2024-08-17…ReconstHisto-g.svg | 1.6 MiB | 56.7 % | 42.8 % |
-| Coloriage-TDF-Citadelle.svg | 514 KiB | 52.0 % | 47.3 % |
-| OSSMS-Vaivre.svg | 5.3 MiB | 57.6 % | 50.6 % |
-| Feedback_Punkteabfrage.svg | 611 KiB | 33.2 % | 27.1 % |
+| 2024-08-17…ReconstHisto-d.svg | 1.6 MiB | **34.2 %** | 43.4 % |
+| OSSMS-Vaivre.svg | 5.3 MiB | **36.1 %** | 50.6 % |
+| Coloriage-TDF-Citadelle.svg | 514 KiB | **32.9 %** | 47.3 % |
+| CrystalTreeofLife_SVG.svg | 592 KiB | 12.0 % | **11.0 %** |
+| Jade_dragon.svg | 211 KiB | **33.4 %** | 33.6 % |
+| Feedback_Punkteabfrage.svg | 611 KiB | 33.1 % | **27.1 %** |
 | Lo-Fi_House_Vinyl_Cover.svg | 2.1 MiB | 34.2 % | 34.2 % |
+| Le_Fritkot_BW.svg | 304 KiB | 69.5 % | **53.6 %** |
 | Fuehrung.svg | 333 KiB | **65.4 %** | fails to parse |
-| **Whole corpus (50 files)** | 30.5 MiB | **72.0 %** | 64.6 % |
-| **Median ratio** | | **71 %** | 58.8 % |
+| **Whole corpus (50 files)** | 30.5 MiB | **63.6 %** | 64.6 % |
+| **Median ratio** | | 64.3 % | **58.8 %** |
 
-svgo's remaining ~12-point median edge comes from passes outside silk's
-scope, several of which trade correctness for size: svgo drops embedded SVG
-fonts that live `<text>` still references, renames every id (breaking
-external sprite references), and rewrites presentation attributes wholesale.
-silk only applies transforms whose safety it can prove.
+silk wins outright on the corpus total and on the big path-heavy scans it
+was built for; svgo keeps a per-file median edge from passes outside silk's
+scope, several of which trade correctness for size (it drops an embedded
+SVG font that live `<text>` still references, renames every id — breaking
+external sprite references — and rewrites arbitrary attributes).
 
 Fidelity, measured with the bundled resvg pixel harness on the same corpus:
-silk passes every file; svgo's default precision exceeds the same per-pixel
-tolerance on several line-art files (its worst file leaves ~6× more
-strongly-diverging pixels than silk's worst).
+silk passes all 50 files; svgo fails to parse one (DTD entity limits) and
+exceeds the pixel tolerance on another (3× the allowed count of diverging
+pixels on line art).
 
-Speed: in-process, silk handles small icons in tens of
-microseconds and the corpus's 1.5 MiB single-path scans in ~150-280 ms
-(≈ 6-10 MiB/s end to end, dominated by candidate re-encoding). The `svgo`
-subprocess needs 1.2-30 s per file on the same machine including Node
-startup — two orders of magnitude slower for a service calling it per
-image.
+Speed, in-process: small icons in ~50 µs, the 1.5 MiB single-path scans in
+~90 ms, the 5.3 MiB corpus outlier in ~420 ms. The `svgo` subprocess needs
+0.7-16 s per file on the same machine including Node startup — 10-180×
+slower for a service invoking it per image.
 
 ## Fidelity harness
 
 Correctness is proven by rendering, not inspection. The test suite renders
 original and optimized documents with [resvg] at 512 px and compares pixels:
 at most 0.2 % of pixels may differ by more than 8/255 per channel, and at
-most 0.02 % by more than 64/255. Any corpus file beyond that fails the
-suite.
+most 0.02 % by more than 64/255; when not a single pixel exceeds 64/255,
+up to 0.5 % may carry the smaller anti-aliasing shifts. Any corpus file
+beyond that fails the suite.
 
 ```
 # resvg must be on PATH (tests skip cleanly without it)
