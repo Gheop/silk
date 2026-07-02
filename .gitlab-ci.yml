@@ -1,0 +1,24 @@
+stages: [test, release]
+
+test:
+  stage: test
+  image: golang:1.26
+  script:
+    - curl -sL -o /tmp/resvg.tar.gz https://github.com/linebender/resvg/releases/download/v0.47.0/resvg-linux-x86_64.tar.gz
+    - tar -xzf /tmp/resvg.tar.gz -C /tmp && install -m755 /tmp/resvg /usr/local/bin/resvg
+    - test -z "$(gofmt -l .)"
+    - go vet ./...
+    - go test ./...
+
+image:
+  stage: release
+  image: docker:27
+  services: [docker:27-dind]
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_JOB_TOKEN" "$CI_REGISTRY"
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - docker build -t "$CI_REGISTRY_IMAGE:$VERSION" -t "$CI_REGISTRY_IMAGE:latest" .
+    - docker push "$CI_REGISTRY_IMAGE:$VERSION"
+    - docker push "$CI_REGISTRY_IMAGE:latest"

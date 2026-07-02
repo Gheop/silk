@@ -1,5 +1,9 @@
 # silk
 
+[![ci](https://github.com/Gheop/silk/actions/workflows/ci.yml/badge.svg)](https://github.com/Gheop/silk/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Gheop/silk.svg)](https://pkg.go.dev/github.com/Gheop/silk)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 `silk` shrinks SVG files by rewriting path geometry and document structure,
 in pure Go — no cgo, no external runtime. It covers the parts of Node's
 `svgo` that actually matter for size (`convertPathData`, `mergePaths`, and a
@@ -17,6 +21,13 @@ A small CLI is included:
 
 ```
 go run github.com/Gheop/silk/cmd/silk@latest -precision 3 input.svg > output.svg
+```
+
+Or as a container image (GitHub and GitLab registries):
+
+```
+docker run -i ghcr.io/gheop/silk < input.svg > output.svg
+docker run -i registry.gitlab.com/gheop/silk < input.svg > output.svg
 ```
 
 ## Usage
@@ -176,6 +187,8 @@ Fuzzing: `go test -fuzz=FuzzOptimize .` exercises the whole optimizer;
 - 2-4× faster: allocation churn cut ~7×, losing encoding candidates are
   costed arithmetically instead of being formatted, merge decisions reuse
   cached geometry.
+- CI on GitHub Actions and GitLab, and a container image published to both
+  registries.
 
 ### v0.1.0 — Initial release (2026-07-02)
 

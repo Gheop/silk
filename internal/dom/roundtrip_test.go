@@ -7,9 +7,14 @@ import (
 	"testing"
 )
 
-// corpusDir points at the benchmark corpus used throughout development. The
-// test is skipped when it is absent so the suite still runs elsewhere.
-const corpusDir = "/home/sib/src/benchmarkpatu/datasets"
+// corpusDir points at a directory of real-world SVGs (override with
+// SILK_CORPUS). Corpus tests skip cleanly when it is absent.
+var corpusDir = func() string {
+	if d := os.Getenv("SILK_CORPUS"); d != "" {
+		return d
+	}
+	return "testdata/corpus"
+}()
 
 func corpusSVGs(t *testing.T) []string {
 	t.Helper()

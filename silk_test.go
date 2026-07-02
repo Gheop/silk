@@ -10,7 +10,12 @@ import (
 	"github.com/Gheop/silk/internal/fidelity"
 )
 
-const corpusDir = "/home/sib/src/benchmarkpatu/datasets"
+var corpusDir = func() string {
+	if d := os.Getenv("SILK_CORPUS"); d != "" {
+		return d
+	}
+	return "testdata/corpus"
+}()
 
 func corpusSVGs(t *testing.T) []string {
 	t.Helper()
