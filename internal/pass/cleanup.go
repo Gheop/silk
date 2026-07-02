@@ -32,7 +32,42 @@ func Cleanup(doc *dom.Node, refs *Refs) {
 	editorPrefixes := collectEditorPrefixes(doc)
 	removeInert(doc, refs, editorPrefixes)
 	stripEditorAttrsAndXmlns(doc, editorPrefixes)
+	removeUnreferencedDefs(doc, refs)
 	removeEmptyContainers(doc, refs)
+}
+
+// disposableDefs are element types inside <defs> that can only take effect
+// through an id reference. Elements that act by name or globally (<style>,
+// <font> and its face, <script>) are never candidates.
+var disposableDefs = map[string]bool{
+	"linearGradient": true, "radialGradient": true, "meshGradient": true,
+	"pattern": true, "filter": true, "clipPath": true, "mask": true,
+	"marker": true, "symbol": true, "g": true, "path": true, "rect": true,
+	"circle": true, "ellipse": true, "line": true, "polyline": true,
+	"polygon": true, "use": true, "image": true, "text": true,
+}
+
+// removeUnreferencedDefs drops direct children of <defs> that nothing
+// references. Definitions render only through references, so an unreferenced
+// one is unreachable; anything questionable (unknown types, subtrees holding
+// a concretely referenced id) stays.
+func removeUnreferencedDefs(doc *dom.Node, refs *Refs) {
+	doc.Walk(func(n *dom.Node) bool {
+		if n.Kind != dom.KindElement || localName(n.Name) != "defs" {
+			return true
+		}
+		kept := n.Children[:0]
+		for _, c := range n.Children {
+			if c.Kind == dom.KindElement && disposableDefs[localName(c.Name)] &&
+				!subtreeReferenced(c, refs) {
+				c.Parent = nil
+				continue
+			}
+			kept = append(kept, c)
+		}
+		n.Children = kept
+		return true
+	})
 }
 
 // collectEditorPrefixes maps namespace prefixes bound to editor URIs.
@@ -111,12 +146,17 @@ func removableInert(n *dom.Node, refs *Refs, editorPrefixes map[string]bool) boo
 }
 
 // subtreeReferenced reports whether any element inside n carries an id that
-// something else references.
+// something else concretely references. Callers only ask this about subtrees
+// that are never rendered, so stylesheet pessimism does not apply.
 func subtreeReferenced(n *dom.Node, refs *Refs) bool {
 	found := false
 	n.Walk(func(c *dom.Node) bool {
 		if c.Kind == dom.KindElement {
-			if id, ok := c.AttrValue("id"); ok && refs.UsedID(id) {
+			if id, ok := c.AttrValue("id"); ok && refs.ConcretelyUsedID(id) {
+				found = true
+				return false
+			}
+			if id, ok := c.AttrValue("xml:id"); ok && refs.ConcretelyUsedID(id) {
 				found = true
 				return false
 			}

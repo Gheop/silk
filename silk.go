@@ -58,12 +58,13 @@ func Optimize(svg []byte, opts Options) ([]byte, error) {
 			bound = opts.MaxPasses
 		}
 	}
-	out, err := optimizeOnce(svg, opts)
+	cache := pass.NewPathCache()
+	out, err := optimizeOnce(svg, opts, cache)
 	if err != nil {
 		return nil, err
 	}
 	for range bound {
-		next, err := optimizeOnce(out, opts)
+		next, err := optimizeOnce(out, opts, cache)
 		if err != nil {
 			break
 		}
@@ -80,7 +81,7 @@ func Optimize(svg []byte, opts Options) ([]byte, error) {
 	return clone(svg), nil
 }
 
-func optimizeOnce(svg []byte, opts Options) ([]byte, error) {
+func optimizeOnce(svg []byte, opts Options, cache *pass.PathCache) ([]byte, error) {
 	doc, err := dom.Parse(svg)
 	if err != nil {
 		return nil, err
@@ -89,8 +90,9 @@ func optimizeOnce(svg []byte, opts Options) ([]byte, error) {
 	pass.Cleanup(doc, refs)
 	pass.CollapseGroups(doc, refs)
 	pass.ConvertTransforms(doc, transformPrecision(opts))
-	pass.MergePaths(doc, refs, pathPrecision(opts))
-	pass.OptimizePaths(doc, pathPrecision(opts))
+	pass.PrewarmPaths(doc, pathPrecision(opts), cache)
+	pass.MergePaths(doc, refs, pathPrecision(opts), cache)
+	pass.OptimizePaths(doc, pathPrecision(opts), cache)
 	return dom.Serialize(doc), nil
 }
 

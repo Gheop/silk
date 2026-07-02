@@ -28,6 +28,7 @@ func Parse(svg []byte) (*Node, error) {
 	cur := doc
 	depth := 0
 	var open *Node // node whose start tag is being lexed (element or PI)
+	var entities map[string]string
 	tagStart := 0
 	prev := 0
 
@@ -70,7 +71,7 @@ func Parse(svg []byte) (*Node, error) {
 
 		case xml.AttributeToken:
 			if open != nil && open.Kind == KindElement {
-				val, opaque := decodeAttrValue(l.AttrVal())
+				val, opaque := decodeAttrValue(l.AttrVal(), entities)
 				open.Attrs = append(open.Attrs, Attr{
 					Name:   string(l.Text()),
 					value:  val,
@@ -121,6 +122,7 @@ func Parse(svg []byte) (*Node, error) {
 
 		case xml.DOCTYPEToken:
 			cur.Children = append(cur.Children, &Node{Kind: KindDoctype, raw: raw, Parent: cur})
+			entities = parseInternalSubset(raw)
 		}
 	}
 }

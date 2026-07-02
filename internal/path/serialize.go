@@ -28,8 +28,9 @@ func Serialize(dst []byte, cs []Cmd, prec int) []byte {
 
 type emitter struct {
 	b        []byte
-	prevKind byte // 0 start, 'l' letter, 'n' number, 'f' flag
-	prevOpen bool // previous number contains '.' or an exponent: a leading
+	numBuf   []byte // scratch for number formatting, reused across calls
+	prevKind byte   // 0 start, 'l' letter, 'n' number, 'f' flag
+	prevOpen bool   // previous number contains '.' or an exponent: a leading
 	// dot cannot extend it, so ".5" may follow unseparated
 }
 
@@ -52,7 +53,8 @@ func (e *emitter) flag(v float64) {
 }
 
 func (e *emitter) number(v float64, prec int) {
-	t := formatNumber(nil, v, prec)
+	t := formatNumber(e.numBuf[:0], v, prec)
+	e.numBuf = t
 	if e.prevKind == 'n' && t[0] != '-' && !(t[0] == '.' && e.prevOpen) {
 		e.b = append(e.b, ' ')
 	}

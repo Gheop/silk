@@ -43,5 +43,17 @@ func FuzzParse(f *testing.F) {
 		if !bytes.Equal(out, out2) {
 			t.Fatalf("serialization not a fixed point: %q vs %q", out, out2)
 		}
+		// OptimizeEmitted's command list must be exactly what its own text
+		// parses back to; fixed-point iteration relies on it.
+		for _, prec := range []int{-1, 3} {
+			enc, emitted := OptimizeEmitted(cs, Options{Precision: prec})
+			reparsed, err := Parse(enc)
+			if err != nil {
+				t.Fatalf("optimized form does not re-parse: %q: %v", enc, err)
+			}
+			if !equalCmds(emitted, reparsed) {
+				t.Fatalf("emitted commands diverge from re-parse:\n%q\n%v\n%v", enc, emitted, reparsed)
+			}
+		}
 	})
 }

@@ -9,7 +9,7 @@ import (
 func runMerge(t *testing.T, in string) string {
 	t.Helper()
 	doc := parse(t, in)
-	MergePaths(doc, Analyze(doc), -1)
+	MergePaths(doc, Analyze(doc), -1, NewPathCache())
 	return string(dom.Serialize(doc))
 }
 

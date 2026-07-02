@@ -4,15 +4,150 @@
 package pass
 
 import (
+	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/Gheop/silk/internal/dom"
 	"github.com/Gheop/silk/internal/path"
 )
 
+// PathCache memoizes optimized path data across passes and pipeline
+// iterations: the global fixed-point loop re-optimizes mostly unchanged
+// documents, and the merge pass needs the same predictions the path pass
+// computes. The mutex only matters during the parallel prewarm; the passes
+// themselves run single-threaded.
+type PathCache struct {
+	mu sync.Mutex
+	m  map[pathCacheKey]pathCacheVal
+}
+
+type pathCacheKey struct {
+	d     string
+	prec  int
+	noops bool
+}
+
+type pathCacheVal struct {
+	out string
+	ok  bool
+}
+
+func NewPathCache() *PathCache {
+	return &PathCache{m: map[pathCacheKey]pathCacheVal{}}
+}
+
+// optimize returns the emitted encoding for d under the given options: the
+// local byte fixed point of the path optimizer, so re-optimizing the result
+// changes nothing. ok is false when the path data does not parse. Both the
+// input and the fixed point are cached, which makes the global pipeline
+// iterations nearly free.
+func (c *PathCache) optimize(d string, prec int, noops bool) (string, bool) {
+	key := pathCacheKey{d, prec, noops}
+	c.mu.Lock()
+	v, hit := c.m[key]
+	c.mu.Unlock()
+	if hit {
+		return v.out, v.ok
+	}
+	cs, err := path.Parse([]byte(d))
+	if err != nil {
+		c.store(key, pathCacheVal{})
+		return "", false
+	}
+	cur := d
+	for range 5 {
+		out, emitted := path.OptimizeEmitted(cs, path.Options{Precision: prec, RemoveNoops: noops})
+		if s := string(out); s == cur {
+			v := pathCacheVal{s, true}
+			c.store(key, v)
+			c.store(pathCacheKey{s, prec, noops}, v)
+			return s, true
+		} else {
+			cur = s
+		}
+		cs = emitted
+	}
+	// No fixed point within the bound: leaving the data untouched is the
+	// only stable answer.
+	c.store(key, pathCacheVal{d, true})
+	return d, true
+}
+
+func (c *PathCache) store(key pathCacheKey, v pathCacheVal) {
+	c.mu.Lock()
+	c.m[key] = v
+	c.mu.Unlock()
+}
+
+// PrewarmPaths fills the cache for every path in the document concurrently.
+// Results are deterministic — each entry is a pure function of its key — so
+// only wall-clock time changes.
+func PrewarmPaths(doc *dom.Node, prec int, cache *PathCache) {
+	docSafe := noopSafeDoc(doc)
+	type job struct {
+		d     string
+		prec  int
+		noops bool
+	}
+	var jobs []job
+	seen := map[pathCacheKey]bool{}
+	doc.Walk(func(n *dom.Node) bool {
+		if n.Kind != dom.KindElement || localName(n.Name) != "path" {
+			return true
+		}
+		d, ok := n.AttrValue("d")
+		if !ok {
+			return true
+		}
+		p, noops := pathOptions(n, prec, docSafe)
+		key := pathCacheKey{d, p, noops}
+		if !seen[key] {
+			seen[key] = true
+			jobs = append(jobs, job{d, p, noops})
+		}
+		return true
+	})
+	if len(jobs) < 2 {
+		for _, j := range jobs {
+			cache.optimize(j.d, j.prec, j.noops)
+		}
+		return
+	}
+	workers := min(runtime.GOMAXPROCS(0), len(jobs))
+	var wg sync.WaitGroup
+	next := make(chan job, len(jobs))
+	for _, j := range jobs {
+		next <- j
+	}
+	close(next)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range next {
+				cache.optimize(j.d, j.prec, j.noops)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// pathOptions resolves the effective options for one path element.
+func pathOptions(n *dom.Node, prec int, docSafe bool) (int, bool) {
+	if underFilter(n) {
+		// A filter's primitives sample relative to the geometry, so segment
+		// removal (which can change the tight bbox) stays off; plain
+		// coordinate rounding measures within tolerance even through
+		// feTurbulence on the corpus.
+		return prec, false
+	}
+	return prec, docSafe && noopSafeElement(n)
+}
+
 // OptimizePaths rewrites every d attribute whose optimized encoding is
 // strictly shorter. Unparseable path data is left as found.
-func OptimizePaths(doc *dom.Node, prec int) {
+func OptimizePaths(doc *dom.Node, prec int, cache *PathCache) {
 	docSafe := noopSafeDoc(doc)
 	doc.Walk(func(n *dom.Node) bool {
 		if n.Kind != dom.KindElement || localName(n.Name) != "path" {
@@ -22,27 +157,12 @@ func OptimizePaths(doc *dom.Node, prec int) {
 		if !ok {
 			return true
 		}
-		cs, err := path.Parse([]byte(d))
-		if err != nil {
-			return true
-		}
-		p := prec
-		noops := docSafe && noopSafeElement(n)
-		if underFilter(n) {
-			// A filter's region and primitives (feTurbulence in particular)
-			// sample relative to the exact geometry; any coordinate change
-			// can shift what they produce. Re-encode losslessly only.
-			p = -1
-			noops = false
-		}
-		out := path.Optimize(cs, path.Options{
-			Precision:   p,
-			RemoveNoops: noops,
-		})
-		// nil means no stable encoding was found; an empty result is only
-		// valid when the input path was itself empty of any drawing.
-		if out != nil && len(out) > 0 && len(out) < len(d) {
-			n.SetAttr("d", string(out))
+		p, noops := pathOptions(n, prec, docSafe)
+		out, ok := cache.optimize(d, p, noops)
+		// An empty result is only valid when the input path was itself
+		// empty of any drawing.
+		if ok && len(out) > 0 && len(out) < len(d) {
+			n.SetAttr("d", out)
 		}
 		return true
 	})

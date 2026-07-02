@@ -14,11 +14,11 @@ import (
 // all stroke, in one element), so overlap is only tolerated when nothing can
 // show the difference: opaque fill, nonzero winding, no stroke. Otherwise
 // the bounding boxes — inflated by the stroke reach — must be disjoint.
-func MergePaths(doc *dom.Node, refs *Refs, prec int) {
+func MergePaths(doc *dom.Node, refs *Refs, prec int, cache *PathCache) {
 	if refs.HasStylesheet {
 		return
 	}
-	m := merger{refs: refs, prec: prec, docSafe: noopSafeDoc(doc)}
+	m := merger{refs: refs, prec: prec, docSafe: noopSafeDoc(doc), cache: cache}
 	doc.Walk(func(n *dom.Node) bool {
 		if n.Kind != dom.KindElement && n.Kind != dom.KindDocument {
 			return true
@@ -32,16 +32,23 @@ type merger struct {
 	refs    *Refs
 	prec    int
 	docSafe bool
+	cache   *PathCache
 }
 
 func (m *merger) mergeChildren(parent *dom.Node) {
 	i := 0
+	// accA carries the merged geometry's box across a chain of merges, so a
+	// chain costs one box per member instead of re-measuring the growing
+	// result each step.
+	var accA *bbox
 	for i < len(parent.Children)-1 {
 		a, b := parent.Children[i], parent.Children[i+1]
-		if merged := m.tryMerge(a, b); merged {
+		if merged, union := m.tryMerge(a, b, accA); merged {
 			parent.RemoveChild(b)
+			accA = union
 			continue // a may swallow the next sibling too
 		}
+		accA = nil
 		i++
 	}
 }
@@ -50,46 +57,53 @@ func (m *merger) mergeChildren(parent *dom.Node) {
 // element. Merge decisions taken on the raw input would flip on the second
 // run, when the input is the rounded output; deciding on the emitted
 // geometry keeps them stable.
-func (m *merger) emittedCmds(el *dom.Node, cs []path.Cmd) []path.Cmd {
-	p := m.prec
-	noops := m.docSafe && noopSafeElement(el)
-	if underFilter(el) {
-		p, noops = -1, false
-	}
-	out := path.Optimize(cs, path.Options{Precision: p, RemoveNoops: noops})
-	if out == nil {
+func (m *merger) emittedCmds(el *dom.Node, d string, cs []path.Cmd) []path.Cmd {
+	p, noops := pathOptions(el, m.prec, m.docSafe)
+	out, ok := m.cache.optimize(d, p, noops)
+	if !ok {
 		return cs
 	}
-	parsed, err := path.Parse(out)
+	parsed, err := path.Parse([]byte(out))
 	if err != nil {
 		return cs
 	}
 	return parsed
 }
 
-func (m *merger) tryMerge(a, b *dom.Node) bool {
+func (m *merger) tryMerge(a, b *dom.Node, accA *bbox) (bool, *bbox) {
 	if a.Kind != dom.KindElement || b.Kind != dom.KindElement ||
 		localName(a.Name) != "path" || localName(b.Name) != "path" {
-		return false
+		return false, nil
 	}
 	if a.HasAttr("id") || b.HasAttr("id") {
-		return false
+		return false, nil
 	}
 	if !sameAttrsExceptD(a, b) {
-		return false
+		return false, nil
 	}
 	da, okA := a.AttrValue("d")
 	db, okB := b.AttrValue("d")
 	if !okA || !okB {
-		return false
+		return false, nil
 	}
 	csA, errA := path.Parse([]byte(da))
 	csB, errB := path.Parse([]byte(db))
 	if errA != nil || errB != nil || len(csA) == 0 || len(csB) == 0 {
-		return false
+		return false, nil
 	}
-	if !overlapSafe(a, m.emittedCmds(a, csA), m.emittedCmds(b, csB)) {
-		return false
+	inflate, ok := strokeReach(a)
+	if !ok {
+		return false, nil
+	}
+	ba := accA
+	if ba == nil {
+		if box, bok := m.emittedBBox(a, da, csA); bok {
+			ba = &box
+		}
+	}
+	bb, okBB := m.emittedBBox(b, db, csB)
+	if ba == nil || !okBB || !disjoint(*ba, bb, inflate) {
+		return false, nil
 	}
 	// A leading lowercase moveto is absolute by definition at the start of
 	// path data; after concatenation it must say so explicitly.
@@ -98,10 +112,19 @@ func (m *merger) tryMerge(a, b *dom.Node) bool {
 	}
 	merged := path.Serialize(nil, append(csA, csB...), -1)
 	if _, err := path.Parse(merged); err != nil {
-		return false
+		return false, nil
 	}
 	a.SetAttr("d", string(merged))
-	return true
+	union := bbox{
+		min(ba.minX, bb.minX), min(ba.minY, bb.minY),
+		max(ba.maxX, bb.maxX), max(ba.maxY, bb.maxY),
+	}
+	return true, &union
+}
+
+// emittedBBox measures the geometry the path pass will emit for d.
+func (m *merger) emittedBBox(el *dom.Node, d string, cs []path.Cmd) (bbox, bool) {
+	return controlBBox(m.emittedCmds(el, d, cs))
 }
 
 // blockedAttrs on either path always prevent merging: they depend on the
@@ -138,29 +161,26 @@ func sameAttrsExceptD(a, b *dom.Node) bool {
 	return countA == countB
 }
 
-// overlapSafe requires provably disjoint geometry. Overlap is never safe to
-// merge: subpaths with opposite winding cancel under the nonzero rule (and
-// punch holes under evenodd), strokes re-order against fills, and partial
-// opacity double-paints. Bounding boxes are inflated by the stroke's reach.
-func overlapSafe(a *dom.Node, csA, csB []path.Cmd) bool {
+// strokeReach returns how far painting can extend beyond the geometry's
+// bounding box. Merging is only safe for provably disjoint geometry: overlap
+// cancels winding under the nonzero rule (and punches holes under evenodd),
+// re-orders strokes against fills, and double-paints partial opacity.
+func strokeReach(a *dom.Node) (float64, bool) {
 	stroke, strokeW, ok := strokeInfo(a)
 	if !ok {
-		return false
+		return 0, false
 	}
-	inflate := 0.0
-	if stroke {
-		// Covers the stroke body plus the default miter reach (limit 4).
-		limit := 4.0
-		if v, lok := a.AttrValue("stroke-miterlimit"); lok {
-			if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > limit {
-				limit = f
-			}
+	if !stroke {
+		return 0, true
+	}
+	// Covers the stroke body plus the default miter reach (limit 4).
+	limit := 4.0
+	if v, lok := a.AttrValue("stroke-miterlimit"); lok {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > limit {
+			limit = f
 		}
-		inflate = strokeW / 2 * limit
 	}
-	ba, okA := controlBBox(csA)
-	bb, okB := controlBBox(csB)
-	return okA && okB && disjoint(ba, bb, inflate)
+	return strokeW / 2 * limit, true
 }
 
 // strokeInfo resolves whether the element can be stroked and with what

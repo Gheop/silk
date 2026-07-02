@@ -1,7 +1,6 @@
 package path
 
 import (
-	"bytes"
 	"math"
 )
 
@@ -16,8 +15,7 @@ type Options struct {
 	RemoveNoops bool
 }
 
-// Optimize re-encodes a command list in its shortest safe form, or returns
-// nil when no stable encoding was found (the caller keeps the original).
+// Optimize re-encodes a command list in its shortest safe form.
 //
 // Geometry is tracked in two spaces: exact (what the input meant) and
 // emitted (what a consumer of the output computes). Every emitted delta is
@@ -26,32 +24,26 @@ type Options struct {
 //
 // Rounding makes some encoding choices threshold-sensitive: a shorthand that
 // was not eligible against the exact input can become eligible against the
-// rounded output. Optimizing repeatedly until the bytes reach a fixed point
-// guarantees idempotence regardless of those thresholds.
+// rounded output, so one run is not always a byte fixed point. The document
+// pipeline reruns itself to a global fixed point, which absorbs that.
 func Optimize(cs []Cmd, o Options) []byte {
-	out := optimizeOnce(cs, o)
-	for range 4 {
-		back, err := Parse(out)
-		if err != nil {
-			return nil
-		}
-		next := optimizeOnce(back, o)
-		if bytes.Equal(next, out) {
-			return out
-		}
-		out = next
-	}
-	// No fixed point within the bound: dropping the optimization is the only
-	// idempotent-safe answer.
-	return nil
+	out, _ := run(cs, o, false)
+	return out
 }
 
-func optimizeOnce(cs []Cmd, o Options) []byte {
+// OptimizeEmitted additionally returns the command list the output denotes
+// (exactly what Parse(output) would yield), sparing callers that iterate to
+// a fixed point a re-parse per round.
+func OptimizeEmitted(cs []Cmd, o Options) ([]byte, []Cmd) {
+	return run(cs, o, true)
+}
+
+func run(cs []Cmd, o Options, collect bool) ([]byte, []Cmd) {
 	prec := o.Precision
 	if prec > 15 {
 		prec = -1 // beyond float64 decimal resolution: exact is both safer and shorter
 	}
-	st := state{o: o, prec: prec, tol: tolAt(prec)}
+	st := state{o: o, prec: prec, tol: tolAt(prec), collect: collect}
 	for i, c := range cs {
 		// Removing or re-basing the command before a smooth curve would
 		// change that curve's reflected control point.
@@ -62,7 +54,7 @@ func optimizeOnce(cs []Cmd, o Options) []byte {
 	if st.pending && !o.RemoveNoops {
 		st.flushPending()
 	}
-	return st.e.b
+	return st.e.b, st.emitted
 }
 
 func isSmooth(op byte) bool {
@@ -74,14 +66,18 @@ func tolAt(prec int) float64 {
 	if prec < 0 {
 		return 0
 	}
-	return 0.5 * math.Pow10(-prec)
+	if prec > 15 {
+		prec = 15
+	}
+	return 0.5 / pow10[prec]
 }
 
 // cand is one candidate encoding of a command, with the consumer-visible
 // state it produces.
 type cand struct {
 	op         byte
-	args       []float64
+	nargs      int8
+	args       [7]float64
 	prec       int   // formatting precision for this candidate's numbers
 	exactMask  uint8 // format arg i exactly regardless of precision
 	endX, endY float64
@@ -114,7 +110,20 @@ type state struct {
 	nextRefl  bool
 	nextClose bool
 
+	collect  bool // record the emitted command list
+	emitted  []Cmd
+	argArena []float64 // backing storage for emitted Args, allocated in blocks
+
 	scratch [6][]byte
+}
+
+func (st *state) arenaArgs(n int) []float64 {
+	if len(st.argArena) < n {
+		st.argArena = make([]float64, 4096)
+	}
+	out := st.argArena[:n:n]
+	st.argArena = st.argArena[n:]
+	return out
 }
 
 func (st *state) q(v float64) float64 { return quantize(v, st.prec) }
@@ -135,7 +144,10 @@ func localPrec(prec int, vecs ...float64) int {
 		if m == 0 || m >= 1 {
 			continue
 		}
-		needed := int(math.Ceil(-math.Log10(m))) + 2
+		needed := 3 // ceil(-log10(m)) + 2 for m in [0.1, 1)
+		for threshold := 0.1; m < threshold && needed < 12; threshold /= 10 {
+			needed++
+		}
 		if needed > out {
 			out = needed
 		}
@@ -311,22 +323,22 @@ func (st *state) lineTo(x, y float64) {
 	}
 	if hOK {
 		cs = append(cs,
-			cand{op: 'h', prec: lp, args: []float64{et.x - st.ecx}, exactMask: endMask & 1,
+			cand{op: 'h', prec: lp, nargs: 1, args: [7]float64{et.x - st.ecx}, exactMask: endMask & 1,
 				endX: qe(et.x-st.ecx) + st.ecx, endY: st.ecy},
-			cand{op: 'H', prec: lp, args: []float64{et.x}, exactMask: endMask & 1,
+			cand{op: 'H', prec: lp, nargs: 1, args: [7]float64{et.x}, exactMask: endMask & 1,
 				endX: qe(et.x), endY: st.ecy})
 	}
 	if vOK {
 		cs = append(cs,
-			cand{op: 'v', prec: lp, args: []float64{et.y - st.ecy}, exactMask: endMask & 1,
+			cand{op: 'v', prec: lp, nargs: 1, args: [7]float64{et.y - st.ecy}, exactMask: endMask & 1,
 				endX: st.ecx, endY: qe(et.y-st.ecy) + st.ecy},
-			cand{op: 'V', prec: lp, args: []float64{et.y}, exactMask: endMask & 1,
+			cand{op: 'V', prec: lp, nargs: 1, args: [7]float64{et.y}, exactMask: endMask & 1,
 				endX: st.ecx, endY: qe(et.y)})
 	}
 	cs = append(cs,
-		cand{op: 'l', prec: lp, args: []float64{et.x - st.ecx, et.y - st.ecy}, exactMask: endMask,
+		cand{op: 'l', prec: lp, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy}, exactMask: endMask,
 			endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy)},
-		cand{op: 'L', prec: lp, args: []float64{et.x, et.y}, exactMask: endMask,
+		cand{op: 'L', prec: lp, nargs: 2, args: [7]float64{et.x, et.y}, exactMask: endMask,
 			endX: qe(et.x), endY: qe(et.y)})
 	st.choose(cs)
 	st.cx, st.cy = x, y
@@ -376,11 +388,11 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 		}
 		cs = append(cs,
 			cand{op: 's', prec: lp, exactMask: m,
-				args: []float64{c2x - st.ecx, c2y - st.ecy, et.x - st.ecx, et.y - st.ecy},
+				nargs: 4, args: [7]float64{c2x - st.ecx, c2y - st.ecy, et.x - st.ecx, et.y - st.ecy},
 				endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy),
 				c2x: st.ecx + ql(c2x-st.ecx), c2y: st.ecy + ql(c2y-st.ecy)},
 			cand{op: 'S', prec: lp, exactMask: m,
-				args: []float64{c2x, c2y, et.x, et.y},
+				nargs: 4, args: [7]float64{c2x, c2y, et.x, et.y},
 				endX: qe(et.x), endY: qe(et.y), c2x: ql(c2x), c2y: ql(c2y)})
 	}
 	if !isSmoothIn {
@@ -390,11 +402,11 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 		}
 		cs = append(cs,
 			cand{op: 'c', prec: lp, exactMask: m,
-				args: []float64{c1x - st.ecx, c1y - st.ecy, c2x - st.ecx, c2y - st.ecy, et.x - st.ecx, et.y - st.ecy},
+				nargs: 6, args: [7]float64{c1x - st.ecx, c1y - st.ecy, c2x - st.ecx, c2y - st.ecy, et.x - st.ecx, et.y - st.ecy},
 				endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy),
 				c2x: st.ecx + ql(c2x-st.ecx), c2y: st.ecy + ql(c2y-st.ecy)},
 			cand{op: 'C', prec: lp, exactMask: m,
-				args: []float64{c1x, c1y, c2x, c2y, et.x, et.y},
+				nargs: 6, args: [7]float64{c1x, c1y, c2x, c2y, et.x, et.y},
 				endX: qe(et.x), endY: qe(et.y), c2x: ql(c2x), c2y: ql(c2y)})
 	}
 	win := st.choose(cs)
@@ -436,9 +448,9 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 			m = 1<<0 | 1<<1
 		}
 		cs = append(cs,
-			cand{op: 't', prec: lp, exactMask: m, args: []float64{et.x - st.ecx, et.y - st.ecy},
+			cand{op: 't', prec: lp, exactMask: m, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
 				endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy), qcx: rx, qcy: ry},
-			cand{op: 'T', prec: lp, exactMask: m, args: []float64{et.x, et.y},
+			cand{op: 'T', prec: lp, exactMask: m, nargs: 2, args: [7]float64{et.x, et.y},
 				endX: qe(et.x), endY: qe(et.y), qcx: rx, qcy: ry})
 	}
 	if !isSmoothIn {
@@ -448,10 +460,10 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 		}
 		cs = append(cs,
 			cand{op: 'q', prec: lp, exactMask: m,
-				args: []float64{qx - st.ecx, qy - st.ecy, et.x - st.ecx, et.y - st.ecy},
+				nargs: 4, args: [7]float64{qx - st.ecx, qy - st.ecy, et.x - st.ecx, et.y - st.ecy},
 				endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy),
 				qcx: st.ecx + ql(qx-st.ecx), qcy: st.ecy + ql(qy-st.ecy)},
-			cand{op: 'Q', prec: lp, exactMask: m, args: []float64{qx, qy, et.x, et.y},
+			cand{op: 'Q', prec: lp, exactMask: m, nargs: 4, args: [7]float64{qx, qy, et.x, et.y},
 				endX: qe(et.x), endY: qe(et.y), qcx: ql(qx), qcy: ql(qy)})
 	}
 	win := st.choose(cs)
@@ -507,10 +519,10 @@ func (st *state) arcTo(rx, ry, rot, laf, sf, x, y float64) {
 	}
 	cs := []cand{
 		{op: 'a', prec: lp, exactMask: mask,
-			args: []float64{rx, ry, rot, laf, sf, et.x - st.ecx, et.y - st.ecy},
+			nargs: 7, args: [7]float64{rx, ry, rot, laf, sf, et.x - st.ecx, et.y - st.ecy},
 			endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy)},
 		{op: 'A', prec: lp, exactMask: mask,
-			args: []float64{rx, ry, rot, laf, sf, et.x, et.y},
+			nargs: 7, args: [7]float64{rx, ry, rot, laf, sf, et.x, et.y},
 			endX: qe(et.x), endY: qe(et.y)},
 	}
 	st.choose(cs)
@@ -526,23 +538,53 @@ func (st *state) flushPending() {
 	st.pending = false
 	x, y := st.px, st.py
 	win := st.choose([]cand{
-		{op: 'M', prec: st.prec, args: []float64{x, y}, endX: st.q(x), endY: st.q(y)},
-		{op: 'm', prec: st.prec, args: []float64{x - st.ecx, y - st.ecy},
+		{op: 'M', prec: st.prec, nargs: 2, args: [7]float64{x, y}, endX: st.q(x), endY: st.q(y)},
+		{op: 'm', prec: st.prec, nargs: 2, args: [7]float64{x - st.ecx, y - st.ecy},
 			endX: st.ecx + st.q(x-st.ecx), endY: st.ecy + st.q(y-st.ecy)},
 	})
 	st.esx, st.esy = win.endX, win.endY
 }
 
+// lowerBoundLen is a cheap bound that no encoding of args can beat: at least
+// the integer digits of every argument, ignoring signs, fractions, and
+// separators.
+func lowerBoundLen(args []float64) int {
+	n := 0
+	for _, v := range args {
+		v = math.Abs(v)
+		switch {
+		case v < 10:
+			n++
+		case v < 100:
+			n += 2
+		case v < 1000:
+			n += 3
+		case v < 10000:
+			n += 4
+		case v < 100000:
+			n += 5
+		default:
+			n += 6
+		}
+	}
+	return n
+}
+
 // choose serializes every candidate in the current emitter context, appends
-// the shortest (first wins ties), and advances the emitted state.
+// the shortest (first wins ties), and advances the emitted state. Candidates
+// that provably cannot beat the current best are skipped without formatting.
 func (st *state) choose(cs []cand) *cand {
-	best, bestLen := 0, int(^uint(0)>>1)
+	best, bestLen := -1, int(^uint(0)>>1)
 	var bestKind byte
 	var bestOpen bool
 	for i := range cs {
-		e := emitter{b: st.scratch[i][:0], prevKind: st.e.prevKind, prevOpen: st.e.prevOpen}
+		if lowerBoundLen(cs[i].args[:cs[i].nargs]) >= bestLen {
+			continue
+		}
+		e := emitter{b: st.scratch[i][:0], numBuf: st.e.numBuf, prevKind: st.e.prevKind, prevOpen: st.e.prevOpen}
 		encodeCand(&e, st.implicit, &cs[i], cs[i].prec)
 		st.scratch[i] = e.b
+		st.e.numBuf = e.numBuf
 		if len(e.b) < bestLen {
 			best, bestLen = i, len(e.b)
 			bestKind, bestOpen = e.prevKind, e.prevOpen
@@ -553,15 +595,37 @@ func (st *state) choose(cs []cand) *cand {
 	w := &cs[best]
 	st.implicit = nextImplicit(w.op)
 	st.ecx, st.ecy = w.endX, w.endY
+	if st.collect {
+		st.emitted = append(st.emitted, st.denoted(w))
+	}
 	return w
 }
 
+// denoted is the command a consumer parses back from this encoding: the
+// values the emitted text stands for.
+func (st *state) denoted(c *cand) Cmd {
+	out := Cmd{Op: c.op}
+	if c.nargs == 0 {
+		return out
+	}
+	out.Args = st.arenaArgs(int(c.nargs))
+	arc := c.op|0x20 == 'a'
+	for i := range int(c.nargs) {
+		v := c.args[i]
+		if c.exactMask&(1<<i) == 0 && !(arc && (i == 3 || i == 4)) {
+			v = quantize(v, c.prec)
+		}
+		out.Args[i] = v
+	}
+	return out
+}
+
 func encodeCand(e *emitter, implicit byte, c *cand, prec int) {
-	if c.op != implicit || len(c.args) == 0 {
+	if c.op != implicit || c.nargs == 0 {
 		e.letter(c.op)
 	}
 	arc := c.op|0x20 == 'a'
-	for i, v := range c.args {
+	for i, v := range c.args[:c.nargs] {
 		switch {
 		case arc && (i == 3 || i == 4):
 			e.flag(v)

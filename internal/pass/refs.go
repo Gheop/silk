@@ -30,6 +30,15 @@ func (r *Refs) UsedID(id string) bool {
 	return r.HasStylesheet || r.ids[id]
 }
 
+// ConcretelyUsedID reports whether the id is actually referenced (by url(),
+// href, aria, or a #id token in stylesheet text). Unlike UsedID it does not
+// pessimize on the mere presence of a stylesheet: never-rendered subtrees
+// (metadata, editor namespaces) cannot be made visible by CSS, so only real
+// references protect them.
+func (r *Refs) ConcretelyUsedID(id string) bool {
+	return r.ids[id]
+}
+
 var urlRefPattern = regexp.MustCompile(`url\(\s*['"]?#([^'")]+)['"]?\s*\)`)
 var cssHashPattern = regexp.MustCompile(`#([A-Za-z_][\w.-]*)`)
 

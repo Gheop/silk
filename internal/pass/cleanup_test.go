@@ -55,3 +55,25 @@ func TestCleanup(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoveUnreferencedDefs(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// Unreferenced definitions go; referenced ones stay.
+		{`<svg><defs><linearGradient id="used"/><linearGradient id="junk"/><path id="dead" d="M0 0h9000"/></defs><rect fill="url(#used)"/></svg>`,
+			`<svg><defs><linearGradient id="used"/></defs><rect fill="url(#used)"/></svg>`},
+		// Chains: A references B, A itself referenced.
+		{`<svg><defs><linearGradient id="a" href="#b"/><linearGradient id="b"/></defs><rect fill="url(#a)"/></svg>`,
+			`<svg><defs><linearGradient id="a" href="#b"/><linearGradient id="b"/></defs><rect fill="url(#a)"/></svg>`},
+		// A stylesheet #id reference protects; style and font never leave.
+		{`<svg><style>#s{stroke:red}</style><defs><path id="s" d="M0 0"/><font id="f"/></defs></svg>`,
+			`<svg><style>#s{stroke:red}</style><defs><path id="s" d="M0 0"/><font id="f"/></defs></svg>`},
+		// A fully unreferenced defs empties out and disappears.
+		{`<svg><defs><clipPath id="c"><path d="M0 0h1"/></clipPath></defs><rect/></svg>`,
+			`<svg><rect/></svg>`},
+	}
+	for _, tc := range cases {
+		if got := runCleanup(t, tc.in); got != tc.want {
+			t.Errorf("Cleanup(%q)\n got: %q\nwant: %q", tc.in, got, tc.want)
+		}
+	}
+}
