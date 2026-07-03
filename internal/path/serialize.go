@@ -63,14 +63,18 @@ func (e *emitter) number(v float64, prec int) {
 	e.prevOpen = bytes.IndexByte(t, '.') >= 0 || bytes.IndexByte(t, 'e') >= 0
 }
 
-// AppendNumberList appends vals in minimal form with path-style separator
-// elision: a sign always separates, and a dot separates from a previous
-// number that already contains one. Exported for attribute lists (points,
-// stroke-dasharray) that share the number grammar.
+// AppendNumberList appends vals in minimal form, space-separated. Attribute
+// lists (points, stroke-dasharray) and CSS values do not share path data's
+// separator elision: ".981.49" is two path numbers but one malformed CSS
+// token, which disables the whole declaration.
 func AppendNumberList(dst []byte, vals []float64, prec int) []byte {
-	e := emitter{b: dst}
-	for _, v := range vals {
-		e.number(v, prec)
+	var num []byte
+	for i, v := range vals {
+		num = formatNumber(num[:0], v, prec)
+		if i > 0 && num[0] != '-' {
+			dst = append(dst, ' ')
+		}
+		dst = append(dst, num...)
 	}
-	return e.b
+	return dst
 }

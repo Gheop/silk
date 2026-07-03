@@ -152,8 +152,12 @@ func TestRoundNumericAttrs(t *testing.T) {
 		{`<path opacity="0.30000000000000004" d="M0 0"/>`, `<path opacity=".3" d="M0 0"/>`},
 		{`<path stroke="red" stroke-width="0.99999994" d="M0 0"/>`,
 			`<path stroke="red" d="M0 0"/>`},
+		// stroke-dasharray reformats but never rounds: a period error
+		// accumulates by the repeat count along the stroke.
 		{`<path stroke="red" stroke-dasharray="1.0001, 2.0002" d="M0 0"/>`,
-			`<path stroke="red" stroke-dasharray="1 2" d="M0 0"/>`},
+			`<path stroke="red" stroke-dasharray="1.0001 2.0002" d="M0 0"/>`},
+		{`<path stroke="red" stroke-dasharray="0.500, 0.250" d="M0 0"/>`,
+			`<path stroke="red" stroke-dasharray=".5 .25" d="M0 0"/>`},
 		// The root svg is never touched.
 		{`<svg width="210.0001mm"><rect width="5.00001"/></svg>`,
 			`<svg width="210.0001mm"><rect width="5"/></svg>`},
