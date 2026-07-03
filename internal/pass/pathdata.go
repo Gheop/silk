@@ -111,7 +111,7 @@ func PrewarmPaths(doc *dom.Node, prec int, cache *PathCache) {
 	var jobs []job
 	seen := map[pathCacheKey]bool{}
 	doc.Walk(func(n *dom.Node) bool {
-		if n.Kind != dom.KindElement || localName(n.Name) != "path" {
+		if n.Kind != dom.KindElement || !pathDataElements[localName(n.Name)] {
 			return true
 		}
 		d, ok := n.AttrValue("d")
@@ -151,8 +151,18 @@ func PrewarmPaths(doc *dom.Node, prec int, cache *PathCache) {
 	wg.Wait()
 }
 
+// pathDataElements carry path data in a d attribute. Font glyphs draw in a
+// context (text stroke, unsupported renderers) the document doesn't show, so
+// they only ever get the conservative re-encoding, never segment surgery.
+var pathDataElements = map[string]bool{
+	"path": true, "glyph": true, "missing-glyph": true,
+}
+
 // pathOptions resolves the effective options for one path element.
 func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear bool) {
+	if localName(n.Name) != "path" {
+		return prec, false, false
+	}
 	if underFilter(n) {
 		// A filter's primitives sample relative to the geometry, so segment
 		// removal and vertex merging (which can change the tight bbox) stay
@@ -187,7 +197,7 @@ func markerSafeElement(n *dom.Node) bool {
 func OptimizePaths(doc *dom.Node, prec int, cache *PathCache) {
 	docSafe := noopSafeDoc(doc)
 	doc.Walk(func(n *dom.Node) bool {
-		if n.Kind != dom.KindElement || localName(n.Name) != "path" {
+		if n.Kind != dom.KindElement || !pathDataElements[localName(n.Name)] {
 			return true
 		}
 		d, ok := n.AttrValue("d")
