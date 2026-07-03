@@ -316,8 +316,18 @@ func extendsRun(sx, sy float64, mids [][2]float64, cx, cy, nx, ny, tol float64) 
 
 // endpoint is where a command must land in emitted space.
 type endpoint struct {
-	x, y  float64
-	exact bool // encode verbatim, bypassing precision
+	x, y    float64
+	exact   bool // encode verbatim, bypassing precision
+	minPrec int  // lower bound on the command's emission precision
+}
+
+// withMin raises a command precision to the endpoint's floor. Exact mode
+// (negative) already keeps everything and stays as is.
+func (et endpoint) withMin(lp int) int {
+	if lp < 0 {
+		return lp
+	}
+	return max(lp, et.minPrec)
 }
 
 // endpointFor handles the last point before a closepath. The close segment's
@@ -325,20 +335,22 @@ type endpoint struct {
 // independent rounding of its two ends redirects it freely, and stroke joins
 // amplify that into visibly different corners (a miter spike appearing or
 // vanishing). When the closing vector is small enough for that to matter,
-// the endpoint lands exactly on emittedStart - exactClosingVector, which
-// reproduces the closing direction bit-for-bit.
+// the endpoint aims at emittedStart - exactClosingVector and the command is
+// forced to the precision at which rounding error stays below ~0.5% of the
+// closing vector — exact emission would spend tens of bytes per number on
+// the same direction guarantee.
 func (st *state) endpointFor(x, y float64) endpoint {
 	if !st.nextClose || st.pending {
-		return endpoint{x, y, false}
+		return endpoint{x: x, y: y}
 	}
 	gx, gy := st.sx-x, st.sy-y
 	if gx == 0 && gy == 0 {
-		return endpoint{st.esx, st.esy, true}
+		return endpoint{x: st.esx, y: st.esy, exact: true}
 	}
 	if math.Abs(gx) <= 20*st.tol && math.Abs(gy) <= 20*st.tol {
-		return endpoint{st.esx - gx, st.esy - gy, true}
+		return endpoint{x: st.esx - gx, y: st.esy - gy, minPrec: localPrec(st.prec, gx, gy)}
 	}
-	return endpoint{x, y, false}
+	return endpoint{x: x, y: y}
 }
 
 func (st *state) command(c Cmd) {
@@ -461,7 +473,7 @@ func (st *state) lineTo(x, y float64) {
 	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
-	lp := localPrec(st.prec, et.x-st.ecx, et.y-st.ecy)
+	lp := et.withMin(localPrec(st.prec, et.x-st.ecx, et.y-st.ecy))
 	ql := func(v float64) float64 { return quantize(v, lp) }
 	tl := tolAt(lp)
 	var endMask uint8
@@ -533,11 +545,11 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
-	lp := localPrec(st.prec,
+	lp := et.withMin(localPrec(st.prec,
 		c1x-st.ecx, c1y-st.ecy, // start tangent
 		c2x-c1x, c2y-c1y, // control-polygon edge
 		et.x-c2x, et.y-c2y, // end tangent
-		et.x-st.ecx, et.y-st.ecy) // chord
+		et.x-st.ecx, et.y-st.ecy)) // chord
 	ql := func(v float64) float64 { return quantize(v, lp) }
 	tl := tolAt(lp)
 	qe := ql
@@ -603,10 +615,10 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
-	lp := localPrec(st.prec,
+	lp := et.withMin(localPrec(st.prec,
 		qx-st.ecx, qy-st.ecy, // start tangent
 		et.x-qx, et.y-qy, // end tangent
-		et.x-st.ecx, et.y-st.ecy) // chord
+		et.x-st.ecx, et.y-st.ecy)) // chord
 	ql := func(v float64) float64 { return quantize(v, lp) }
 	tl := tolAt(lp)
 	qe := ql
@@ -672,8 +684,8 @@ func (st *state) arcTo(rx, ry, rot, laf, sf, x, y float64) {
 	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
-	lp := localPrec(st.prec, et.x-st.ecx, et.y-st.ecy, rx, ry,
-		arcMargin(rx, ry, rot, et.x-st.ecx, et.y-st.ecy), 0)
+	lp := et.withMin(localPrec(st.prec, et.x-st.ecx, et.y-st.ecy, rx, ry,
+		arcMargin(rx, ry, rot, et.x-st.ecx, et.y-st.ecy), 0))
 	ql := func(v float64) float64 { return quantize(v, lp) }
 	qe := ql
 	var endMask uint8
