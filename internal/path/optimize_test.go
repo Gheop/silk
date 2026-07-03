@@ -32,11 +32,19 @@ func TestOptimizeEncodingChoices(t *testing.T) {
 		{"M0 0L10 0", exact, "M0 0h10"},
 		{"M0 0L0 10", exact, "M0 0v10"},
 		{"M0 0H10V10", exact, "M0 0h10v10"},
-		// Smooth cubic when the control mirrors the previous one.
+		// Smooth cubic when the control mirrors the previous one. (Controls
+		// are perturbed off the exact-quadratic degeneracy.)
+		{
+			"M0 0C10 11 20 10 30 0C40 -10 50 -9 60 0",
+			exact,
+			"M0 0c10 11 20 10 30 0s20-9 30 0",
+		},
+		// A cubic that is exactly an elevated quadratic demotes, and its
+		// mirrored successor rides the smooth shorthand.
 		{
 			"M0 0C10 10 20 10 30 0C40 -10 50 -10 60 0",
 			exact,
-			"M0 0c10 10 20 10 30 0s20-10 30 0",
+			"M0 0q15 15 30 0t30 0",
 		},
 		// Smooth quadratic.
 		{"M0 0Q5 5 10 0Q15 -5 20 0", exact, "M0 0q5 5 10 0t10 0"},
@@ -101,7 +109,7 @@ func TestOptimizeNoopRemoval(t *testing.T) {
 func TestOptimizeExactGeometry(t *testing.T) {
 	paths := []string{
 		"M100 100L110 110H5V-3l-2-2z",
-		"M0 0C10 10 20 10 30 0C40 -10 50 -10 60 0S80 10 90 0",
+		"M0 0C10 11 20 10 30 0C40 -10 50 -9 60 0S80 10 90 0",
 		"M0 0Q5 5 10 0Q15 -5 20 0T30 0t5 5",
 		"M0 0A5 5 30 1 0 10 10a2 2 0 015 5",
 		"M.5.5l.1.1c.1.2 .2.2 .3.3",

@@ -134,8 +134,8 @@ type state struct {
 	argArena   []float64 // backing storage for emitted Args, allocated in blocks
 	arenaBlock int       // next arena block size, input-proportional at first
 
-	candBuf [6]cand // reused candidate storage: one live set at a time
-	scratch [6][]byte
+	candBuf [8]cand // reused candidate storage: one live set at a time
+	scratch [8][]byte
 }
 
 func (st *state) arenaArgs(n int) []float64 {
@@ -590,11 +590,60 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 				nargs: 6, args: [7]float64{c1x, c1y, c2x, c2y, et.x, et.y},
 				endX: qe(et.x), endY: qe(et.y), c2x: ql(c2x), c2y: ql(c2y)})
 	}
+	// A cubic whose two quadratic pullbacks agree is an elevated quadratic:
+	// the same curve within the rounding budget, two arguments fewer. A
+	// smooth follower would reflect a control this rewrite discards.
+	var cqx, cqy float64
+	isQuad := false
+	if !st.nextRefl {
+		q1x, q1y := (3*c1x-st.cx)/2, (3*c1y-st.cy)/2
+		q2x, q2y := (3*c2x-x)/2, (3*c2y-y)/2
+		dx, dy := q1x-q2x, q1y-q2y
+		// max pointwise deviation between the cubic and the elevated
+		// quadratic with the averaged control is |Q1-Q2|/4.
+		if dx*dx+dy*dy <= 16*st.tol*st.tol {
+			isQuad = true
+			cqx, cqy = (q1x+q2x)/2, (q1y+q2y)/2
+			rx, ry := st.ecx, st.ecy
+			if st.prevQuad {
+				rx, ry = 2*st.ecx-st.eqcx, 2*st.ecy-st.eqcy
+			}
+			if math.Abs(ql(cqx)-rx) <= tl && math.Abs(ql(cqy)-ry) <= tl {
+				var m uint8
+				if et.exact {
+					m = 1<<0 | 1<<1
+				}
+				cs = append(cs,
+					cand{op: 't', prec: lp, exactMask: m, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
+						endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy), qcx: rx, qcy: ry},
+					cand{op: 'T', prec: lp, exactMask: m, nargs: 2, args: [7]float64{et.x, et.y},
+						endX: qe(et.x), endY: qe(et.y), qcx: rx, qcy: ry})
+			}
+			var m uint8
+			if et.exact {
+				m = 1<<2 | 1<<3
+			}
+			cs = append(cs,
+				cand{op: 'q', prec: lp, exactMask: m,
+					nargs: 4, args: [7]float64{cqx - st.ecx, cqy - st.ecy, et.x - st.ecx, et.y - st.ecy},
+					endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy),
+					qcx: st.ecx + ql(cqx-st.ecx), qcy: st.ecy + ql(cqy-st.ecy)},
+				cand{op: 'Q', prec: lp, exactMask: m,
+					nargs: 4, args: [7]float64{cqx, cqy, et.x, et.y},
+					endX: qe(et.x), endY: qe(et.y), qcx: ql(cqx), qcy: ql(cqy)})
+		}
+	}
 	win := st.choose(cs)
-	st.ec2x, st.ec2y = win.c2x, win.c2y
 	st.cx, st.cy = x, y
-	st.prevCubic, st.prevQuad = true, false
 	st.open = true
+	if isQuad && (win.op|0x20 == 'q' || win.op|0x20 == 't') {
+		st.eqcx, st.eqcy = win.qcx, win.qcy
+		st.pqcx, st.pqcy = cqx, cqy
+		st.prevCubic, st.prevQuad = false, true
+		return
+	}
+	st.ec2x, st.ec2y = win.c2x, win.c2y
+	st.prevCubic, st.prevQuad = true, false
 }
 
 func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
