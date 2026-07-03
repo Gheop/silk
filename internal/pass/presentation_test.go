@@ -110,6 +110,22 @@ func TestShortenColors(t *testing.T) {
 	}
 }
 
+func TestMinifyStylesheetText(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// Whitespace runs collapse; declarations survive untouched.
+		{"<svg><style>\n\t.a { fill: red; }\n\t.b { stroke: blue; }\n</style><path class=\"a\" d=\"M0 0\"/></svg>",
+			`<svg><style>.a { fill: red; } .b { stroke: blue; }</style><path class="a" d="M0 0"/></svg>`},
+		// Quotes could hide significant whitespace: hands off.
+		{`<svg><style>.a { font-family: "My  Font"; }</style><path class="a" d="M0 0"/></svg>`,
+			`<svg><style>.a { font-family: "My  Font"; }</style><path class="a" d="M0 0"/></svg>`},
+	}
+	for _, tc := range cases {
+		if got := runPresentation(t, tc.in, 3); got != tc.want {
+			t.Errorf("stylesheet(%q)\n got: %q\nwant: %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestStyleMinify(t *testing.T) {
 	// With a stylesheet present, conversion is off but pure minification of
 	// the style value is still safe.

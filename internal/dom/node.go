@@ -62,6 +62,10 @@ type Node struct {
 // doctype, processing instruction). It is nil for elements and documents.
 func (n *Node) Raw() []byte { return n.raw }
 
+// SetText replaces a text node's serialized content. The caller is
+// responsible for keeping any markup-significant characters escaped.
+func (n *Node) SetText(s string) { n.raw = []byte(s) }
+
 // AttrValue returns the decoded value of the named attribute. ok is false when
 // the attribute is absent or its value is opaque.
 func (n *Node) AttrValue(name string) (string, bool) {

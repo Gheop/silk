@@ -115,6 +115,9 @@ func OptimizePresentation(doc *dom.Node, refs *Refs, prec int) {
 			return true
 		}
 		optimizeStyleAttr(n, refs, prec)
+		if localName(n.Name) == "style" {
+			minifyStylesheetText(n)
+		}
 		if names, ok := geoAttrs[localName(n.Name)]; ok {
 			for _, name := range names {
 				roundAttr(n, name, prec)
@@ -168,6 +171,26 @@ func minifyNumbers(v string, prec int) (string, bool) {
 		return "", false
 	}
 	return string(path.AppendNumberList(nil, vals, prec)), true
+}
+
+// minifyStylesheetText collapses whitespace runs in a <style> element's text
+// to single spaces: CSS treats a run as one separator everywhere but inside
+// strings, so the pass backs off from sheets carrying quotes, escapes, or
+// leftover markup (CDATA wrappers).
+func minifyStylesheetText(n *dom.Node) {
+	for _, c := range n.Children {
+		if c.Kind != dom.KindText {
+			continue
+		}
+		raw := string(c.Raw())
+		if strings.ContainsAny(raw, "\"'\\<") {
+			continue
+		}
+		out := strings.Join(strings.Fields(raw), " ")
+		if len(out) < len(raw) {
+			c.SetText(out)
+		}
+	}
 }
 
 func optimizeStyleAttr(n *dom.Node, refs *Refs, prec int) {
