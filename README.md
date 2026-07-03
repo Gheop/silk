@@ -94,15 +94,21 @@ point).
 
 Structure: comment/metadata/editor-namespace removal (Inkscape, Illustrator,
 Sketch, …), unreferenced definitions inside `<defs>`, insignificant
-whitespace (between elements and inside tags), empty containers, group
-collapsing, transform-list flattening, merging of adjacent paths with
-identical attributes and provably disjoint geometry.
+whitespace (between elements and inside tags, including between structural
+elements under `xml:space="preserve"` — it only governs text), empty
+containers, group collapsing, transform-list flattening, merging of adjacent
+paths with identical attributes and provably disjoint geometry, namespace
+declarations that are redundant (re-declared in scope) or unused, and inert
+attributes (`version`, zero viewport offsets, `xml:space` that provably
+cannot change text rendering). Embedded font glyph outlines get the same
+shortest-form re-encoding as visible paths.
 
 Styling: inline `style` becomes presentation attributes when no stylesheet
 could outrank them, declarations set to their initial value drop (with
-inheritance analysis), colors take their shortest spelling, and numeric
+inheritance analysis), colors take their shortest spelling, numeric
 attributes (shape geometry, `points`, opacities, stroke metrics) round to
-the configured precision.
+the configured precision, and `<style>` sheets lose their indentation (never
+touched when they carry strings or escapes).
 
 A reference graph (ids targeted by `url(#…)`, `href`, `aria-*`, stylesheet
 text) marks everything referenced as untouchable. A `<style>` element
@@ -124,14 +130,14 @@ after optimization, lower is better.
 | 2024-08-17…ReconstHisto-d.svg | 1.6 MiB | **34.2 %** | 43.4 % |
 | OSSMS-Vaivre.svg | 5.3 MiB | **36.1 %** | 50.6 % |
 | Coloriage-TDF-Citadelle.svg | 514 KiB | **32.9 %** | 47.3 % |
-| CrystalTreeofLife_SVG.svg | 592 KiB | 12.0 % | **11.0 %** |
-| Jade_dragon.svg | 211 KiB | **33.4 %** | 33.6 % |
-| Feedback_Punkteabfrage.svg | 611 KiB | 33.1 % | **27.1 %** |
+| CrystalTreeofLife_SVG.svg | 592 KiB | 11.9 % | **11.0 %** |
+| Jade_dragon.svg | 211 KiB | **33.3 %** | 33.6 % |
+| Feedback_Punkteabfrage.svg | 611 KiB | 27.8 % | **27.1 %** |
 | Lo-Fi_House_Vinyl_Cover.svg | 2.1 MiB | 34.2 % | 34.2 % |
-| Le_Fritkot_BW.svg | 304 KiB | 69.5 % | **53.6 %** |
-| Fuehrung.svg | 333 KiB | **65.4 %** | fails to parse |
-| **Whole corpus (50 files)** | 30.5 MiB | **63.6 %** | 64.6 % |
-| **Median ratio** | | 64.3 % | **58.8 %** |
+| Le_Fritkot_BW.svg | 304 KiB | 65.8 % | **53.6 %** |
+| Fuehrung.svg | 333 KiB | **55.2 %** | fails to parse |
+| **Whole corpus (50 files)** | 30.5 MiB | **62.6 %** | 64.6 % |
+| **Median ratio** | | 60.7 % | **58.8 %** |
 
 silk wins outright on the corpus total and on the big path-heavy scans it
 was built for; svgo keeps a per-file median edge from passes outside silk's
@@ -145,7 +151,7 @@ exceeds the pixel tolerance on another (3× the allowed count of diverging
 pixels on line art).
 
 Speed, in-process: small icons in ~50 µs, the 1.5 MiB single-path scans in
-~90 ms, the 5.3 MiB corpus outlier in ~420 ms. The `svgo` subprocess needs
+~85 ms, the 5.3 MiB corpus outlier in ~400 ms. The `svgo` subprocess needs
 0.7-16 s per file on the same machine including Node startup — 10-180×
 slower for a service invoking it per image.
 
@@ -172,6 +178,27 @@ Fuzzing: `go test -fuzz=FuzzOptimize .` exercises the whole optimizer;
 [resvg]: https://github.com/linebender/resvg
 
 ## Changelog
+
+### v0.3.0 — Namespace and xml:space cleanup, glyph outlines, close-vector encoding (2026-07-03)
+
+- Fixed: the last point before a closepath was emitted with full float64
+  precision when the closing vector was small (up to 20 decimals per
+  number); it now takes the fewest decimals that still pin the closing
+  direction. Line-art outputs shrink up to 5 %.
+- New: whitespace between structural elements is removed under
+  `xml:space="preserve"` too — the attribute only governs text content.
+  The attribute itself drops when the text it covers renders identically
+  either way, along with `version`, zero viewport offsets, redundant
+  re-declared namespaces, and namespace prefixes nothing uses.
+- New: embedded SVG font glyphs (`<glyph>`, `<missing-glyph>`) get the same
+  shortest-form path re-encoding as visible paths.
+- New: `<style>` sheet indentation collapses when provably safe (no strings,
+  escapes, or markup in the sheet).
+- Whole corpus drops from 63.6 % to 62.6 % of input; median from 64.3 % to
+  60.7 %. Illustrator-generated files gain the most (Pictomago -23 pts,
+  Fuehrung -10 pts, Feedback -5 pts).
+- Slightly faster on big files (~10 % on the 1.5 MiB scans) — less
+  whitespace and shorter numbers to carry through the pipeline.
 
 ### v0.2.0 — Styling passes, curve straightening, big speedups (2026-07-02)
 
