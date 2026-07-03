@@ -9,9 +9,12 @@ type Options struct {
 	// Precision is the number of decimals kept; negative keeps exact values.
 	Precision int
 
-	// RemoveNoops enables dropping zero-length segments and empty subpaths.
-	// Only safe when the path cannot be stroked or carry markers; the caller
-	// decides from document context.
+	// RemoveNoops enables dropping zero-length segments and empty subpaths,
+	// and stands the direction-preserving protections down: tiny-segment
+	// precision escalation and closing-vector re-basing guard stroke joins
+	// and markers, which the flag's precondition rules out. Only safe when
+	// the path cannot be stroked or carry markers; the caller decides from
+	// document context.
 	RemoveNoops bool
 
 	// MergeCollinear enables folding runs of collinear line segments into
@@ -52,8 +55,10 @@ func run(cs []Cmd, o Options, collect bool) ([]byte, []Cmd) {
 	if o.MergeCollinear {
 		// Straightening a chain moves its whole edge coherently — more
 		// visible than pointwise rounding — so the tube is half the rounding
-		// tolerance.
+		// tolerance. Arc conversion removes vertices the same way straight-
+		// ening does (markers would show it), hence the shared gate.
 		cs = mergeCollinear(cs, tolAt(prec)/2)
+		cs = convertArcs(cs, tolAt(prec)/2, prec)
 	}
 	st := state{o: o, prec: prec, tol: tolAt(prec), collect: collect}
 	// Pre-size the growth points: ~10 bytes per emitted command, one emitted
@@ -149,6 +154,17 @@ func (st *state) arenaArgs(n int) []float64 {
 }
 
 func (st *state) q(v float64) float64 { return quantize(v, st.prec) }
+
+// dirPrec is localPrec for a fillable segment: direction preservation only
+// matters when a stroke join or marker can amplify it, which the RemoveNoops
+// precondition rules out. Arcs keep full escalation either way — there the
+// vectors bound the center's position, which is fill-visible.
+func (st *state) dirPrec(vecs ...float64) int {
+	if st.o.RemoveNoops {
+		return st.prec
+	}
+	return localPrec(st.prec, vecs...)
+}
 
 // localPrec picks the precision for one command from its direction vectors,
 // given as flat (dx, dy) pairs: segment chords, control-polygon edges. A
@@ -285,6 +301,337 @@ func mergeCollinear(cs []Cmd, tol float64) []Cmd {
 	return out
 }
 
+// arcFit is a circle a run of cubics traces, with the accumulated sweep.
+type arcFit struct {
+	cx, cy, r float64
+	ccw       bool // atan2 angle increases along the run (SVG sweep flag 1)
+}
+
+// arcSeg records one converted cubic: its endpoint and sweep contribution.
+type arcSeg struct {
+	ex, ey, c2x, c2y float64
+	delta            float64
+}
+
+// convertArcs replaces runs of at least two consecutive cubics that trace a
+// common circle — drawing tools export circles and round corners as cubic
+// chains — with endpoint arcs: 7 arguments instead of 6 per curve replaced.
+// Every sample must stay within the tube around the circle, and the run
+// keeps a single rotation direction with total sweep under 2π (an arc whose
+// endpoints coincide renders as nothing).
+func convertArcs(cs []Cmd, tol float64, prec int) []Cmd {
+	if tol <= 0 {
+		return cs
+	}
+	hasCubic := false
+	for i := range cs {
+		if op := cs[i].Op | 0x20; op == 'c' || op == 's' {
+			hasCubic = true
+			break
+		}
+	}
+	if !hasCubic {
+		return cs
+	}
+	out := make([]Cmd, 0, len(cs))
+	var cx, cy, spX, spY float64
+	var pc2x, pc2y float64 // absolute second control of the previous cubic
+	prevCubic := false
+
+	// cubicAbs resolves command k (a cubic) to absolute control points from
+	// the current point, deriving a smooth command's first control the way
+	// the consumer would.
+	cubicAbs := func(k int) (c1x, c1y, c2x, c2y, x, y float64) {
+		c := cs[k]
+		rel := c.Op >= 'a'
+		at := func(i int) (float64, float64) {
+			if rel {
+				return cx + c.Args[i], cy + c.Args[i+1]
+			}
+			return c.Args[i], c.Args[i+1]
+		}
+		if c.Op|0x20 == 's' {
+			c1x, c1y = cx, cy
+			if prevCubic {
+				c1x, c1y = 2*cx-pc2x, 2*cy-pc2y
+			}
+			c2x, c2y = at(0)
+			x, y = at(2)
+			return
+		}
+		c1x, c1y = at(0)
+		c2x, c2y = at(2)
+		x, y = at(4)
+		return
+	}
+
+	// copyCubic emits command k verbatim and advances the tracked state.
+	copyCubic := func(k int) {
+		_, _, c2x, c2y, x, y := cubicAbs(k)
+		out = append(out, cs[k])
+		pc2x, pc2y = c2x, c2y
+		cx, cy = x, y
+		prevCubic = true
+	}
+
+	for i := 0; i < len(cs); {
+		op := cs[i].Op | 0x20
+		if op != 'c' && op != 's' {
+			c := cs[i]
+			out = append(out, c)
+			rel := c.Op >= 'a'
+			switch op {
+			case 'm':
+				if rel {
+					cx, cy = cx+c.Args[0], cy+c.Args[1]
+				} else {
+					cx, cy = c.Args[0], c.Args[1]
+				}
+				spX, spY = cx, cy
+			case 'z':
+				cx, cy = spX, spY
+			case 'l', 'q', 't', 'a':
+				n := len(c.Args)
+				x, y := c.Args[n-2], c.Args[n-1]
+				if rel {
+					x, y = cx+x, cy+y
+				}
+				cx, cy = x, y
+			case 'h':
+				if rel {
+					cx += c.Args[0]
+				} else {
+					cx = c.Args[0]
+				}
+			case 'v':
+				if rel {
+					cy += c.Args[0]
+				} else {
+					cy = c.Args[0]
+				}
+			}
+			prevCubic = false
+			i++
+			continue
+		}
+		c1x, c1y, c2x, c2y, x, y := cubicAbs(i)
+		fit, delta, ok := fitArcCircle(cx, cy, c1x, c1y, c2x, c2y, x, y, tol, prec)
+		if !ok {
+			copyCubic(i)
+			i++
+			continue
+		}
+		group := []arcSeg{{x, y, c2x, c2y, delta}}
+		// Extend over following cubics on the same circle, walking a
+		// shadow of the tracked state.
+		gx, gy := x, y
+		gc2x, gc2y := c2x, c2y
+		j := i + 1
+		for j < len(cs) {
+			if op := cs[j].Op | 0x20; op != 'c' && op != 's' {
+				break
+			}
+			sc, ss := cx, cy
+			spc, spq := pc2x, pc2y
+			wasCubic := prevCubic
+			cx, cy, pc2x, pc2y, prevCubic = gx, gy, gc2x, gc2y, true
+			d1x, d1y, d2x, d2y, nx, ny := cubicAbs(j)
+			cx, cy, pc2x, pc2y, prevCubic = sc, ss, spc, spq, wasCubic
+			d, ok := onCircle(fit, gx, gy, d1x, d1y, d2x, d2y, nx, ny, tol)
+			if !ok || sweepOf(group)+d > 3.8*math.Pi {
+				break
+			}
+			group = append(group, arcSeg{nx, ny, d2x, d2y, d})
+			gx, gy, gc2x, gc2y = nx, ny, d2x, d2y
+			j++
+		}
+		// The command after the run would reflect the last cubic's control.
+		if j < len(cs) && (cs[j].Op|0x20) == 's' {
+			group = group[:len(group)-1]
+			j--
+		}
+		if len(group) < 2 {
+			copyCubic(i)
+			i++
+			continue
+		}
+		emit := func(segs []arcSeg) {
+			s := sweepOf(segs)
+			last := segs[len(segs)-1]
+			laf, sf := 0.0, 0.0
+			if s > math.Pi {
+				laf = 1
+			}
+			if fit.ccw {
+				sf = 1
+			}
+			out = append(out, Cmd{Op: 'A', Args: []float64{fit.r, fit.r, 0, laf, sf, last.ex, last.ey}})
+		}
+		// One endpoint arc cannot span 2π (coincident endpoints render as
+		// nothing); a run that far — the common full circle — splits at the
+		// boundary nearest half the sweep.
+		if total := sweepOf(group); total > 1.9*math.Pi {
+			si, acc := 1, group[0].delta
+			for si < len(group)-1 && acc+group[si].delta < total/2 {
+				acc += group[si].delta
+				si++
+			}
+			if sweepOf(group[:si]) > 1.95*math.Pi || sweepOf(group[si:]) > 1.95*math.Pi {
+				copyCubic(i)
+				i++
+				continue
+			}
+			emit(group[:si])
+			emit(group[si:])
+		} else {
+			emit(group)
+		}
+		last := group[len(group)-1]
+		cx, cy = last.ex, last.ey
+		prevCubic = false
+		i += len(group)
+	}
+	return out
+}
+
+func sweepOf(group []arcSeg) float64 {
+	t := 0.0
+	for i := range group {
+		t += group[i].delta
+	}
+	return t
+}
+
+func bezierAt(t, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y float64) (float64, float64) {
+	u := 1 - t
+	a, b, c, d := u*u*u, 3*u*u*t, 3*u*t*t, t*t*t
+	return a*p0x + b*c1x + c*c2x + d*p3x, a*p0y + b*c1y + c*c2y + d*p3y
+}
+
+// fitArcCircle fits the circle through a cubic's endpoints and midpoint and
+// accepts it when the quarter samples stay inside the tube, the bulge is
+// deep enough to be genuinely curved (a near-flat fit puts the center far
+// away and unstably), and the sweep direction is consistent.
+func fitArcCircle(p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64, prec int) (arcFit, float64, bool) {
+	mx, my := bezierAt(0.5, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y)
+	d := 2 * (p0x*(my-p3y) + mx*(p3y-p0y) + p3x*(p0y-my))
+	if math.Abs(d) < 1e-12 {
+		return arcFit{}, 0, false
+	}
+	s0 := p0x*p0x + p0y*p0y
+	sm := mx*mx + my*my
+	s3 := p3x*p3x + p3y*p3y
+	ux := (s0*(my-p3y) + sm*(p3y-p0y) + s3*(p0y-my)) / d
+	uy := (s0*(p3x-mx) + sm*(p0x-p3x) + s3*(mx-p0x)) / d
+	r := math.Hypot(p0x-ux, p0y-uy)
+	if r > 1e8 || r == 0 {
+		return arcFit{}, 0, false
+	}
+	chord2 := (p3x-p0x)*(p3x-p0x) + (p3y-p0y)*(p3y-p0y)
+	if chord2 == 0 {
+		return arcFit{}, 0, false
+	}
+	// Sagitta: bail out on near-flat curves.
+	disc := r*r - chord2/4
+	if disc > 0 && chord2/4/(r+math.Sqrt(disc)) < 4*tol {
+		return arcFit{}, 0, false
+	}
+	fit := arcFit{cx: ux, cy: uy, r: r}
+	// Direction from start toward the midpoint sample.
+	a0 := math.Atan2(p0y-uy, p0x-ux)
+	am := math.Atan2(my-uy, mx-ux)
+	a1 := math.Atan2(p3y-uy, p3x-ux)
+	dm := math.Mod(am-a0+4*math.Pi, 2*math.Pi)
+	d1 := math.Mod(a1-a0+4*math.Pi, 2*math.Pi)
+	fit.ccw = dm < d1
+	delta, ok := onCircle(fit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol)
+	if !ok {
+		return arcFit{}, 0, false
+	}
+	if snapped, ok := snapRadius(fit, prec, p0x, p0y, p3x, p3y); ok {
+		if d, ok := onCircle(snapped, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol); ok {
+			return snapped, d, true
+		}
+	}
+	return fit, delta, true
+}
+
+// snapRadius re-fits the circle with the radius quantized at the output
+// precision, recentered on the chord's perpendicular bisector nearest the
+// exact fit. The fitted radius of an approximated circle carries the
+// approximation noise (50.000304 for a kappa circle of 50); the drawing
+// almost always means the round number.
+func snapRadius(fit arcFit, prec int, p0x, p0y, p3x, p3y float64) (arcFit, bool) {
+	r := quantize(fit.r, prec)
+	if r == fit.r || r <= 0 {
+		return arcFit{}, false
+	}
+	mx, my := (p0x+p3x)/2, (p0y+p3y)/2
+	dx, dy := p3x-p0x, p3y-p0y
+	chord2 := dx*dx + dy*dy
+	disc := r*r - chord2/4
+	if disc < 0 {
+		return arcFit{}, false
+	}
+	h := math.Sqrt(disc)
+	l := math.Sqrt(chord2)
+	if l == 0 {
+		return arcFit{}, false
+	}
+	// Unit normal to the chord; the exact fit picks the side.
+	nx, ny := -dy/l, dx/l
+	c1x, c1y := mx+h*nx, my+h*ny
+	c2x, c2y := mx-h*nx, my-h*ny
+	cx, cy := c1x, c1y
+	if math.Hypot(c2x-fit.cx, c2y-fit.cy) < math.Hypot(c1x-fit.cx, c1y-fit.cy) {
+		cx, cy = c2x, c2y
+	}
+	return arcFit{cx: cx, cy: cy, r: r, ccw: fit.ccw}, true
+}
+
+// onCircle verifies one cubic against an already-fitted circle and returns
+// its sweep contribution: every sample within the tube, endpoint included,
+// and the midpoint angularly between the endpoints (no doubling back). The
+// tube widens with the radius — the standard kappa approximation tools
+// export deviates from the true circle by 2.7e-4 of it, and swapping one
+// for the other moves the belly by that same sub-antialiasing amount — but
+// stays within 1% of this segment's own bulge: a shallow sweep on a huge
+// circle is close to a straight stroke, where half a unit of drift is a
+// visibly displaced line. The original endpoints are kept exactly.
+func onCircle(fit arcFit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64) (float64, bool) {
+	chord2 := (p3x-p0x)*(p3x-p0x) + (p3y-p0y)*(p3y-p0y)
+	sag := fit.r
+	if disc := fit.r*fit.r - chord2/4; disc > 0 {
+		sag = chord2 / 4 / (fit.r + math.Sqrt(disc))
+	}
+	tube := max(tol, min(5e-4*fit.r, 0.01*sag, 0.5))
+	for _, t := range [...]float64{0.25, 0.5, 0.75, 1} {
+		bx, by := bezierAt(t, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y)
+		if math.Abs(math.Hypot(bx-fit.cx, by-fit.cy)-fit.r) > tube {
+			return 0, false
+		}
+	}
+	a0 := math.Atan2(p0y-fit.cy, p0x-fit.cx)
+	mx, my := bezierAt(0.5, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y)
+	am := math.Atan2(my-fit.cy, mx-fit.cx)
+	a1 := math.Atan2(p3y-fit.cy, p3x-fit.cx)
+	dm := math.Mod(am-a0+4*math.Pi, 2*math.Pi)
+	d1 := math.Mod(a1-a0+4*math.Pi, 2*math.Pi)
+	if d1 < 1e-9 || dm < 1e-9 || dm == d1 {
+		return 0, false
+	}
+	if dm < d1 {
+		if !fit.ccw {
+			return 0, false
+		}
+		return d1, true
+	}
+	if fit.ccw {
+		return 0, false
+	}
+	return 2*math.Pi - d1, true
+}
+
 // extendsRun checks that every intermediate vertex (mids plus the current
 // endpoint) sits inside the tube of [start, candidate] with monotonically
 // increasing projection: no doubling back, no pivoted tube escaping.
@@ -317,8 +664,7 @@ func extendsRun(sx, sy float64, mids [][2]float64, cx, cy, nx, ny, tol float64) 
 // endpoint is where a command must land in emitted space.
 type endpoint struct {
 	x, y    float64
-	exact   bool // encode verbatim, bypassing precision
-	minPrec int  // lower bound on the command's emission precision
+	minPrec int // lower bound on the command's emission precision
 }
 
 // withMin raises a command precision to the endpoint's floor. Exact mode
@@ -340,12 +686,16 @@ func (et endpoint) withMin(lp int) int {
 // closing vector — exact emission would spend tens of bytes per number on
 // the same direction guarantee.
 func (st *state) endpointFor(x, y float64) endpoint {
-	if !st.nextClose || st.pending {
+	// The closing vector only shows through the stroke's join; a fill
+	// closes to the start point wherever the endpoint rounds to.
+	if !st.nextClose || st.pending || st.o.RemoveNoops {
 		return endpoint{x: x, y: y}
 	}
 	gx, gy := st.sx-x, st.sy-y
 	if gx == 0 && gy == 0 {
-		return endpoint{x: st.esx, y: st.esy, exact: true}
+		// A perfectly closed subpath: land on the emitted start to twelve
+		// decimals, which is zero for every renderer (f32 internally).
+		return endpoint{x: st.esx, y: st.esy, minPrec: 12}
 	}
 	if math.Abs(gx) <= 20*st.tol && math.Abs(gy) <= 20*st.tol {
 		return endpoint{x: st.esx - gx, y: st.esy - gy, minPrec: localPrec(st.prec, gx, gy)}
@@ -473,15 +823,9 @@ func (st *state) lineTo(x, y float64) {
 	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
-	lp := et.withMin(localPrec(st.prec, et.x-st.ecx, et.y-st.ecy))
+	lp := et.withMin(st.dirPrec(et.x-st.ecx, et.y-st.ecy))
 	ql := func(v float64) float64 { return quantize(v, lp) }
 	tl := tolAt(lp)
-	var endMask uint8
-	qe := ql
-	if et.exact {
-		endMask = 1<<0 | 1<<1
-		qe = func(v float64) float64 { return v }
-	}
 	cs := st.candBuf[:0]
 	// Eligibility compares quantized values: the second run sees the rounded
 	// output, so deciding on exact inputs would flip choices between runs
@@ -489,29 +833,25 @@ func (st *state) lineTo(x, y float64) {
 	// off-axis coordinate must not bend a short segment's direction.
 	hOK := math.Abs(ql(et.y)-st.ecy) <= tl || ql(et.y-st.ecy) == 0
 	vOK := math.Abs(ql(et.x)-st.ecx) <= tl || ql(et.x-st.ecx) == 0
-	if et.exact {
-		hOK = et.y == st.ecy
-		vOK = et.x == st.ecx
-	}
 	if hOK {
 		cs = append(cs,
-			cand{op: 'h', prec: lp, nargs: 1, args: [7]float64{et.x - st.ecx}, exactMask: endMask & 1,
-				endX: qe(et.x-st.ecx) + st.ecx, endY: st.ecy},
-			cand{op: 'H', prec: lp, nargs: 1, args: [7]float64{et.x}, exactMask: endMask & 1,
-				endX: qe(et.x), endY: st.ecy})
+			cand{op: 'h', prec: lp, nargs: 1, args: [7]float64{et.x - st.ecx},
+				endX: ql(et.x-st.ecx) + st.ecx, endY: st.ecy},
+			cand{op: 'H', prec: lp, nargs: 1, args: [7]float64{et.x},
+				endX: ql(et.x), endY: st.ecy})
 	}
 	if vOK {
 		cs = append(cs,
-			cand{op: 'v', prec: lp, nargs: 1, args: [7]float64{et.y - st.ecy}, exactMask: endMask & 1,
-				endX: st.ecx, endY: qe(et.y-st.ecy) + st.ecy},
-			cand{op: 'V', prec: lp, nargs: 1, args: [7]float64{et.y}, exactMask: endMask & 1,
-				endX: st.ecx, endY: qe(et.y)})
+			cand{op: 'v', prec: lp, nargs: 1, args: [7]float64{et.y - st.ecy},
+				endX: st.ecx, endY: ql(et.y-st.ecy) + st.ecy},
+			cand{op: 'V', prec: lp, nargs: 1, args: [7]float64{et.y},
+				endX: st.ecx, endY: ql(et.y)})
 	}
 	cs = append(cs,
-		cand{op: 'l', prec: lp, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy}, exactMask: endMask,
-			endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy)},
-		cand{op: 'L', prec: lp, nargs: 2, args: [7]float64{et.x, et.y}, exactMask: endMask,
-			endX: qe(et.x), endY: qe(et.y)})
+		cand{op: 'l', prec: lp, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
+			endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy)},
+		cand{op: 'L', prec: lp, nargs: 2, args: [7]float64{et.x, et.y},
+			endX: ql(et.x), endY: ql(et.y)})
 	st.choose(cs)
 	st.cx, st.cy = x, y
 	st.prevCubic, st.prevQuad = false, false
@@ -545,17 +885,13 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
-	lp := et.withMin(localPrec(st.prec,
+	lp := et.withMin(st.dirPrec(
 		c1x-st.ecx, c1y-st.ecy, // start tangent
 		c2x-c1x, c2y-c1y, // control-polygon edge
 		et.x-c2x, et.y-c2y, // end tangent
 		et.x-st.ecx, et.y-st.ecy)) // chord
 	ql := func(v float64) float64 { return quantize(v, lp) }
 	tl := tolAt(lp)
-	qe := ql
-	if et.exact {
-		qe = func(v float64) float64 { return v }
-	}
 	smoothOK := isSmoothIn
 	if !smoothOK {
 		rx, ry := st.reflC()
@@ -563,45 +899,44 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	}
 	cs := st.candBuf[:0]
 	if smoothOK {
-		var m uint8
-		if et.exact {
-			m = 1<<2 | 1<<3
-		}
 		cs = append(cs,
-			cand{op: 's', prec: lp, exactMask: m,
+			cand{op: 's', prec: lp,
 				nargs: 4, args: [7]float64{c2x - st.ecx, c2y - st.ecy, et.x - st.ecx, et.y - st.ecy},
-				endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy),
+				endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
 				c2x: st.ecx + ql(c2x-st.ecx), c2y: st.ecy + ql(c2y-st.ecy)},
-			cand{op: 'S', prec: lp, exactMask: m,
+			cand{op: 'S', prec: lp,
 				nargs: 4, args: [7]float64{c2x, c2y, et.x, et.y},
-				endX: qe(et.x), endY: qe(et.y), c2x: ql(c2x), c2y: ql(c2y)})
+				endX: ql(et.x), endY: ql(et.y), c2x: ql(c2x), c2y: ql(c2y)})
 	}
 	if !isSmoothIn {
-		var m uint8
-		if et.exact {
-			m = 1<<4 | 1<<5
-		}
 		cs = append(cs,
-			cand{op: 'c', prec: lp, exactMask: m,
+			cand{op: 'c', prec: lp,
 				nargs: 6, args: [7]float64{c1x - st.ecx, c1y - st.ecy, c2x - st.ecx, c2y - st.ecy, et.x - st.ecx, et.y - st.ecy},
-				endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy),
+				endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
 				c2x: st.ecx + ql(c2x-st.ecx), c2y: st.ecy + ql(c2y-st.ecy)},
-			cand{op: 'C', prec: lp, exactMask: m,
+			cand{op: 'C', prec: lp,
 				nargs: 6, args: [7]float64{c1x, c1y, c2x, c2y, et.x, et.y},
-				endX: qe(et.x), endY: qe(et.y), c2x: ql(c2x), c2y: ql(c2y)})
+				endX: ql(et.x), endY: ql(et.y), c2x: ql(c2x), c2y: ql(c2y)})
 	}
 	// A cubic whose two quadratic pullbacks agree is an elevated quadratic:
 	// the same curve within the rounding budget, two arguments fewer. A
-	// smooth follower would reflect a control this rewrite discards.
+	// smooth follower would reflect a control this rewrite discards. Only
+	// clearly curved curves qualify: renderers flatten long near-straight
+	// quadratics and cubics into visibly different polylines, so a control
+	// hugging the chord (under 0.5% of it) keeps the original form.
 	var cqx, cqy float64
 	isQuad := false
 	if !st.nextRefl {
 		q1x, q1y := (3*c1x-st.cx)/2, (3*c1y-st.cy)/2
 		q2x, q2y := (3*c2x-x)/2, (3*c2y-y)/2
 		dx, dy := q1x-q2x, q1y-q2y
-		// max pointwise deviation between the cubic and the elevated
+		chx, chy := x-st.cx, y-st.cy
+		// |cross(Q-p0, chord)| = control-to-chord distance × chord length.
+		bulge := math.Abs(((q1x+q2x)/2-st.cx)*chy - ((q1y+q2y)/2-st.cy)*chx)
+		// Max pointwise deviation between the cubic and the elevated
 		// quadratic with the averaged control is |Q1-Q2|/4.
-		if dx*dx+dy*dy <= 16*st.tol*st.tol {
+		if dx*dx+dy*dy <= 16*st.tol*st.tol &&
+			bulge >= 0.005*(chx*chx+chy*chy) {
 			isQuad = true
 			cqx, cqy = (q1x+q2x)/2, (q1y+q2y)/2
 			rx, ry := st.ecx, st.ecy
@@ -609,28 +944,20 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 				rx, ry = 2*st.ecx-st.eqcx, 2*st.ecy-st.eqcy
 			}
 			if math.Abs(ql(cqx)-rx) <= tl && math.Abs(ql(cqy)-ry) <= tl {
-				var m uint8
-				if et.exact {
-					m = 1<<0 | 1<<1
-				}
 				cs = append(cs,
-					cand{op: 't', prec: lp, exactMask: m, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
-						endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy), qcx: rx, qcy: ry},
-					cand{op: 'T', prec: lp, exactMask: m, nargs: 2, args: [7]float64{et.x, et.y},
-						endX: qe(et.x), endY: qe(et.y), qcx: rx, qcy: ry})
-			}
-			var m uint8
-			if et.exact {
-				m = 1<<2 | 1<<3
+					cand{op: 't', prec: lp, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
+						endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy), qcx: rx, qcy: ry},
+					cand{op: 'T', prec: lp, nargs: 2, args: [7]float64{et.x, et.y},
+						endX: ql(et.x), endY: ql(et.y), qcx: rx, qcy: ry})
 			}
 			cs = append(cs,
-				cand{op: 'q', prec: lp, exactMask: m,
+				cand{op: 'q', prec: lp,
 					nargs: 4, args: [7]float64{cqx - st.ecx, cqy - st.ecy, et.x - st.ecx, et.y - st.ecy},
-					endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy),
+					endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
 					qcx: st.ecx + ql(cqx-st.ecx), qcy: st.ecy + ql(cqy-st.ecy)},
-				cand{op: 'Q', prec: lp, exactMask: m,
+				cand{op: 'Q', prec: lp,
 					nargs: 4, args: [7]float64{cqx, cqy, et.x, et.y},
-					endX: qe(et.x), endY: qe(et.y), qcx: ql(cqx), qcy: ql(cqy)})
+					endX: ql(et.x), endY: ql(et.y), qcx: ql(cqx), qcy: ql(cqy)})
 		}
 	}
 	win := st.choose(cs)
@@ -664,41 +991,29 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
-	lp := et.withMin(localPrec(st.prec,
+	lp := et.withMin(st.dirPrec(
 		qx-st.ecx, qy-st.ecy, // start tangent
 		et.x-qx, et.y-qy, // end tangent
 		et.x-st.ecx, et.y-st.ecy)) // chord
 	ql := func(v float64) float64 { return quantize(v, lp) }
 	tl := tolAt(lp)
-	qe := ql
-	if et.exact {
-		qe = func(v float64) float64 { return v }
-	}
 	smoothOK := isSmoothIn || (math.Abs(ql(qx)-rx) <= tl && math.Abs(ql(qy)-ry) <= tl)
 	cs := st.candBuf[:0]
 	if smoothOK {
-		var m uint8
-		if et.exact {
-			m = 1<<0 | 1<<1
-		}
 		cs = append(cs,
-			cand{op: 't', prec: lp, exactMask: m, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
-				endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy), qcx: rx, qcy: ry},
-			cand{op: 'T', prec: lp, exactMask: m, nargs: 2, args: [7]float64{et.x, et.y},
-				endX: qe(et.x), endY: qe(et.y), qcx: rx, qcy: ry})
+			cand{op: 't', prec: lp, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
+				endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy), qcx: rx, qcy: ry},
+			cand{op: 'T', prec: lp, nargs: 2, args: [7]float64{et.x, et.y},
+				endX: ql(et.x), endY: ql(et.y), qcx: rx, qcy: ry})
 	}
 	if !isSmoothIn {
-		var m uint8
-		if et.exact {
-			m = 1<<2 | 1<<3
-		}
 		cs = append(cs,
-			cand{op: 'q', prec: lp, exactMask: m,
+			cand{op: 'q', prec: lp,
 				nargs: 4, args: [7]float64{qx - st.ecx, qy - st.ecy, et.x - st.ecx, et.y - st.ecy},
-				endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy),
+				endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
 				qcx: st.ecx + ql(qx-st.ecx), qcy: st.ecy + ql(qy-st.ecy)},
-			cand{op: 'Q', prec: lp, exactMask: m, nargs: 4, args: [7]float64{qx, qy, et.x, et.y},
-				endX: qe(et.x), endY: qe(et.y), qcx: ql(qx), qcy: ql(qy)})
+			cand{op: 'Q', prec: lp, nargs: 4, args: [7]float64{qx, qy, et.x, et.y},
+				endX: ql(et.x), endY: ql(et.y), qcx: ql(qx), qcy: ql(qy)})
 	}
 	win := st.choose(cs)
 	st.eqcx, st.eqcy = win.qcx, win.qcy
@@ -732,19 +1047,29 @@ func (st *state) arcTo(rx, ry, rot, laf, sf, x, y float64) {
 		return
 	}
 	st.flushPending()
+	// Near the degenerate half-turn the center's distance from the chord
+	// goes as the square root of the margin: any change to the chord —
+	// even rounding either endpoint independently — moves the arc without
+	// bound. Only reproducing the exact input chord keeps the figure, so
+	// the endpoint is re-based on the emitted start and the chord is
+	// emitted verbatim (quantized beyond float noise).
+	if cvx, cvy := x-st.cx, y-st.cy; arcMargin(rx, ry, rot, cvx, cvy) <= 20*st.tol && st.tol > 0 {
+		cvx, cvy = quantize(cvx, 12), quantize(cvy, 12)
+		st.choose(append(st.candBuf[:0], cand{op: 'a', prec: 12,
+			nargs: 7, args: [7]float64{rx, ry, rot, laf, sf, cvx, cvy},
+			endX: st.ecx + cvx, endY: st.ecy + cvy}))
+		st.cx, st.cy = x, y
+		st.prevCubic, st.prevQuad = false, false
+		st.open = true
+		return
+	}
 	et := st.endpointFor(x, y)
 	lp := et.withMin(localPrec(st.prec, et.x-st.ecx, et.y-st.ecy, rx, ry,
 		arcMargin(rx, ry, rot, et.x-st.ecx, et.y-st.ecy), 0))
 	ql := func(v float64) float64 { return quantize(v, lp) }
-	qe := ql
-	var endMask uint8
-	if et.exact {
-		endMask = 1<<5 | 1<<6
-		qe = func(v float64) float64 { return v }
-	}
 	// Radii that round to zero would turn the arc into a straight line;
 	// consumers scale small radii up instead. Keep them exact.
-	mask := endMask
+	var mask uint8
 	if ql(rx) == 0 && rx != 0 {
 		mask |= 1 << 0
 	}
@@ -754,10 +1079,10 @@ func (st *state) arcTo(rx, ry, rot, laf, sf, x, y float64) {
 	cs := []cand{
 		{op: 'a', prec: lp, exactMask: mask,
 			nargs: 7, args: [7]float64{rx, ry, rot, laf, sf, et.x - st.ecx, et.y - st.ecy},
-			endX: st.ecx + qe(et.x-st.ecx), endY: st.ecy + qe(et.y-st.ecy)},
+			endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy)},
 		{op: 'A', prec: lp, exactMask: mask,
 			nargs: 7, args: [7]float64{rx, ry, rot, laf, sf, et.x, et.y},
-			endX: qe(et.x), endY: qe(et.y)},
+			endX: ql(et.x), endY: ql(et.y)},
 	}
 	st.choose(cs)
 	st.cx, st.cy = x, y
