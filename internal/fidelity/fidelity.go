@@ -38,7 +38,7 @@ const (
 type Result struct {
 	MaxDiff      int // worst per-channel difference
 	BadPixels    int // pixels with any channel above softDiff
-	StrongPixels int // pixels with any channel above strongDiff
+	StrongPixels int // pixels above strongDiff that are not 1px edge shifts
 	TotalPixels  int
 }
 
@@ -78,7 +78,12 @@ func RenderDiff(dir string, original, optimized []byte) (Result, error) {
 	if a.Bounds() != b.Bounds() {
 		return Result{}, fmt.Errorf("size mismatch: %v vs %v", a.Bounds(), b.Bounds())
 	}
-	res := Result{TotalPixels: a.Bounds().Dx() * a.Bounds().Dy()}
+	return diffImages(a, b), nil
+}
+
+func diffImages(a, b *image.NRGBA) Result {
+	w, h := a.Bounds().Dx(), a.Bounds().Dy()
+	res := Result{TotalPixels: w * h}
 	for i := 0; i < len(a.Pix); i += 4 {
 		m := 0
 		for c := 0; c < 4; c++ {
@@ -96,11 +101,53 @@ func RenderDiff(dir string, original, optimized []byte) (Result, error) {
 		if m > softDiff {
 			res.BadPixels++
 		}
-		if m > strongDiff {
+		if m > strongDiff && !edgeShift(a, b, w, h, i) {
 			res.StrongPixels++
 		}
 	}
-	return res, nil
+	return res
+}
+
+// edgeShift reports whether the strongly differing pixel at byte offset i is
+// a razor-edge sampling flip: each image's pixel already occurs (within the
+// soft tolerance) in the 3×3 neighborhood of the other. Sub-tolerance
+// coordinate changes displace a hard edge by a fraction of a device pixel
+// and flip isolated boundary samples 0-or-255; a real defect paints colors
+// the other image does not have nearby. Both directions are required, so a
+// spike or a recolored region still counts. Displaced pixels stay in the
+// BadPixels budget.
+func edgeShift(a, b *image.NRGBA, w, h, i int) bool {
+	return nearbyMatch(a, b, w, h, i) && nearbyMatch(b, a, w, h, i)
+}
+
+// nearbyMatch reports whether src's pixel at offset i is within softDiff of
+// some pixel in dst's 3×3 neighborhood of the same location.
+func nearbyMatch(src, dst *image.NRGBA, w, h, i int) bool {
+	p := i / 4
+	x, y := p%w, p/w
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			nx, ny := x+dx, y+dy
+			if nx < 0 || ny < 0 || nx >= w || ny >= h {
+				continue
+			}
+			j := (ny*w + nx) * 4
+			m := 0
+			for c := 0; c < 4; c++ {
+				d := int(src.Pix[i+c]) - int(dst.Pix[j+c])
+				if d < 0 {
+					d = -d
+				}
+				if d > m {
+					m = d
+				}
+			}
+			if m <= softDiff {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func render(dir, name string, svg []byte) (*image.NRGBA, error) {
