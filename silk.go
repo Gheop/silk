@@ -91,6 +91,7 @@ func optimizeOnce(svg []byte, opts Options, cache *pass.PathCache) ([]byte, erro
 	pass.OptimizePresentation(doc, refs, pathPrecision(opts))
 	pass.CollapseGroups(doc, refs)
 	pass.ConvertTransforms(doc, transformPrecision(opts))
+	pass.ConvertShapes(doc, refs)
 	pass.PrewarmPaths(doc, pathPrecision(opts), cache)
 	pass.MergePaths(doc, refs, pathPrecision(opts), cache)
 	pass.OptimizePaths(doc, pathPrecision(opts), cache)

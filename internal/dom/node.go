@@ -66,6 +66,13 @@ func (n *Node) Raw() []byte { return n.raw }
 // responsible for keeping any markup-significant characters escaped.
 func (n *Node) SetText(s string) { n.raw = []byte(s) }
 
+// Rename changes an element's tag name; both tags re-serialize.
+func (n *Node) Rename(name string) {
+	n.Name = name
+	n.modified = true
+	n.rawEnd = nil
+}
+
 // AttrValue returns the decoded value of the named attribute. ok is false when
 // the attribute is absent or its value is opaque.
 func (n *Node) AttrValue(name string) (string, bool) {
