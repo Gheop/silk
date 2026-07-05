@@ -134,6 +134,36 @@ func TestZeroValueOptionsAreExact(t *testing.T) {
 	}
 }
 
+// TestGroupPresentationSurvivesShapeConversion guards a suspected regression
+// where a <g>'s presentation attributes (fill, stroke, stroke-width) push
+// onto a lone shape child and then vanish when that child is rewritten to a
+// <path>, leaving the stroke to fall back to the SVG defaults (fill:black,
+// stroke:none) instead of rendering. Both CollapseGroups and ConvertShapes
+// already carry these attributes across in isolation (see
+// internal/pass/groups_test.go and internal/pass/shapes_test.go); this test
+// exercises them together through the public API.
+func TestGroupPresentationSurvivesShapeConversion(t *testing.T) {
+	cases := []string{
+		`<svg viewBox="0 0 100 100"><g fill="none" stroke="black" stroke-width="4"><polyline points="10,10 90,10 90,90"/></g></svg>`,
+		`<svg viewBox="0 0 100 100"><g fill="none" stroke="black" stroke-width="4"><line x1="10" y1="10" x2="90" y2="90"/></g></svg>`,
+	}
+	for _, in := range cases {
+		out, err := Optimize([]byte(in), DefaultOptions())
+		if err != nil {
+			t.Fatalf("Optimize(%q): %v", in, err)
+		}
+		if !bytes.Contains(out, []byte(`stroke-width="4"`)) {
+			t.Errorf("stroke-width dropped: in=%q out=%s", in, out)
+		}
+		hasStroke := bytes.Contains(out, []byte(`stroke="black"`)) ||
+			bytes.Contains(out, []byte(`stroke="#000"`)) ||
+			bytes.Contains(out, []byte(`stroke="#000000"`))
+		if !hasStroke {
+			t.Errorf("stroke color dropped: in=%q out=%s", in, out)
+		}
+	}
+}
+
 func TestUnparseableReturnsError(t *testing.T) {
 	if _, err := Optimize([]byte(`<a></b>`), DefaultOptions()); err == nil {
 		t.Error("expected error for mismatched tags")
