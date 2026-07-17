@@ -202,6 +202,12 @@ Fuzzing: `go test -fuzz=FuzzOptimize .` exercises the whole optimizer;
 
 [resvg]: https://github.com/linebender/resvg
 
+## Used by
+
+silk is the SVG stage of [patu.dev](https://patu.dev), an asset compression
+API: POST a raw file, get the optimized bytes back. The benchmark corpus
+above is drawn from its real-world workload.
+
 ## Changelog
 
 ### v0.4.0 — Arc and quadratic conversion, shape-to-path, corpus doubled (2026-07-03)
