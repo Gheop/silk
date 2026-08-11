@@ -97,15 +97,19 @@ var geoAttrs = map[string][]string{
 }
 
 // numericRoundProps are presentation properties whose values are plain
-// numbers (or number lists) safe to round and minify. stroke-dasharray is
-// deliberately absent: the pattern repeats along the whole stroke, so a
-// rounding error in the period accumulates by the repeat count and shifts
-// far dashes visibly — it is reformatted exactly instead.
+// numbers (or number lists) safe to round and minify. stroke-dasharray and
+// stroke-width are deliberately absent: a dasharray rounding error
+// accumulates by the repeat count along the stroke, and a stroke-width
+// error is amplified without bound by miter joins at needle-sharp corners
+// (miter length is width/sin(θ/2)) — both are reformatted exactly instead.
 var numericRoundProps = map[string]bool{
-	"stroke-width": true, "stroke-dashoffset": true, "stroke-miterlimit": true,
+	"stroke-dashoffset": true, "stroke-miterlimit": true,
 	"opacity": true, "fill-opacity": true,
 	"stroke-opacity": true, "stop-opacity": true, "flood-opacity": true,
 }
+
+// exactNumericProps are reformatted at exact precision, never rounded.
+var exactNumericProps = [...]string{"stroke-dasharray", "stroke-width"}
 
 // OptimizePresentation rewrites styling to its shortest equivalent form:
 // inline styles become presentation attributes (shorter, and only when no
@@ -129,7 +133,9 @@ func OptimizePresentation(doc *dom.Node, refs *Refs, prec int) {
 		for name := range numericRoundProps {
 			roundAttr(n, name, prec)
 		}
-		roundAttr(n, "stroke-dasharray", -1)
+		for _, name := range exactNumericProps {
+			roundAttr(n, name, -1)
+		}
 		optimizeColorAttrs(n, refs)
 		return true
 	})
@@ -235,9 +241,9 @@ func optimizeStyleAttr(n *dom.Node, refs *Refs, prec int) {
 		if colorProps[d.prop] {
 			d.val = shortestColor(d.val)
 		}
-		if numericRoundProps[d.prop] || d.prop == "stroke-dasharray" {
+		if numericRoundProps[d.prop] || d.prop == "stroke-dasharray" || d.prop == "stroke-width" {
 			p := prec
-			if d.prop == "stroke-dasharray" {
+			if d.prop == "stroke-dasharray" || d.prop == "stroke-width" {
 				p = -1
 			}
 			if s, ok := minifyNumbers(d.val, p); ok && len(s) <= len(d.val) {

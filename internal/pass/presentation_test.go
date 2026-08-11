@@ -150,8 +150,10 @@ func TestRoundNumericAttrs(t *testing.T) {
 		{`<rect width="50%" height="10em"/>`, `<rect width="50%" height="10em"/>`},
 		// Opacity-like numbers round too (also via style conversion).
 		{`<path opacity="0.30000000000000004" d="M0 0"/>`, `<path opacity=".3" d="M0 0"/>`},
+		// stroke-width is never rounded (miter amplification): the near-1
+		// value stays and therefore cannot drop as a default.
 		{`<path stroke="red" stroke-width="0.99999994" d="M0 0"/>`,
-			`<path stroke="red" d="M0 0"/>`},
+			`<path stroke="red" stroke-width=".99999994" d="M0 0"/>`},
 		// stroke-dasharray reformats but never rounds: a period error
 		// accumulates by the repeat count along the stroke.
 		{`<path stroke="red" stroke-dasharray="1.0001, 2.0002" d="M0 0"/>`,
@@ -220,5 +222,25 @@ func TestShorthandPinsLonghandsInStyle(t *testing.T) {
 	got2 := runPresentation(t, `<svg>`+in2+`</svg>`, 3)
 	if !strings.Contains(got2, `font:10px serif;font-size:12px`) || !strings.Contains(got2, `fill="red"`) {
 		t.Errorf("font family handling wrong: %q", got2)
+	}
+}
+
+func TestStrokeWidthNeverRounded(t *testing.T) {
+	// Miter joins at needle-sharp corners amplify a stroke-width error
+	// without bound (miter length is width/sin(θ/2)): reformat exactly.
+	cases := []struct{ in, want string }{
+		{`<path stroke="red" stroke-width="1.04027808" d="M0 0h9"/>`,
+			`<path stroke="red" stroke-width="1.04027808" d="M0 0h9"/>`},
+		{`<path style="stroke:red;stroke-width:1.04027808" d="M0 0h9"/>`,
+			`<path d="M0 0h9" stroke="red" stroke-width="1.04027808"/>`},
+		{`<path stroke="red" stroke-width="0.500" d="M0 0h9"/>`,
+			`<path stroke="red" stroke-width=".5" d="M0 0h9"/>`},
+	}
+	for _, tc := range cases {
+		in := `<svg>` + tc.in + `</svg>`
+		want := `<svg>` + tc.want + `</svg>`
+		if got := runPresentation(t, in, 3); got != want {
+			t.Errorf("stroke-width(%q)\n got: %q\nwant: %q", tc.in, got, want)
+		}
 	}
 }
