@@ -959,7 +959,9 @@ func (st *state) reflC() (float64, float64) {
 	if st.prevCubic {
 		return 2*st.ecx - st.ec2x, 2*st.ecy - st.ec2y
 	}
-	return st.ecx, st.ecy
+	// No previous cubic: the consumer reflects onto its current point,
+	// which a still-buffered moveto is about to move.
+	return st.refCur()
 }
 
 func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
@@ -1085,7 +1087,10 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 
 func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 	// The control the consumer would derive for a smooth quadratic here.
-	rx, ry := st.ecx, st.ecy
+	// With a moveto still buffered, the consumer's point is the moveto's
+	// target — not the pre-moveto position, whose coincidence with the
+	// control would wrongly qualify a t/T that renders as a line.
+	rx, ry := st.refCur()
 	if st.prevQuad {
 		rx, ry = 2*st.ecx-st.eqcx, 2*st.ecy-st.eqcy
 	}

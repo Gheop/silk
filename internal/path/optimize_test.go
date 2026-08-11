@@ -328,3 +328,14 @@ func TestDroppedNoopKeepsReflectionBase(t *testing.T) {
 		t.Errorf("s emitted against a dropped-noop reflection base: %s", out)
 	}
 }
+
+func TestNoSmoothShorthandAcrossMoveto(t *testing.T) {
+	// A moveto breaks the smooth-reflection chain: a T after m takes its
+	// control from the current point and renders a straight line. The
+	// pre-moveto position coinciding with the control must not qualify it.
+	out := opt(t, "M10,60 Q90,60 90,140 Q10,140 10,60 Z M10,140 Q10,60 90,60 Q90,140 10,140 Z",
+		Options{Precision: 3})
+	if strings.Contains(out, "t") {
+		t.Errorf("t emitted across a moveto: %s", out)
+	}
+}
