@@ -217,13 +217,13 @@ percent of input after optimization, lower is better.
 | Lo-Fi_House_Vinyl_Cover.svg | 2.1 MiB | 34.2 % | 34.2 % |
 | Le_Fritkot_BW.svg | 304 KiB | 64.7 % | **53.6 %** |
 | Fuehrung.svg | 333 KiB | **55.0 %** | fails to parse |
-| **Whole corpus (100 files)** | 42.3 MiB | **64.3 %** | 65.6 % |
-| **Median ratio** | | 58.3 % | **57.0 %** |
+| **Whole corpus (100 files)** | 42.3 MiB | **64.4 %** | 65.6 % |
+| **Median ratio** | | 58.6 % | **57.0 %** |
 
 Fidelity, measured with the bundled resvg pixel harness on the same corpus:
-silk passes all 100 files. svgo fails 14 of them — one does not parse (DTD
+silk passes all 100 files. svgo fails 9 of them — one does not parse (DTD
 entity limits), one loses its entire background (a dark textured infographic
-comes back white, 73 % of pixels wrong), and twelve exceed the pixel
+comes back white, 73 % of pixels wrong), and seven exceed the pixel
 tolerance, mostly dashed and hairline line art.
 
 ### Where the remaining median gap comes from
@@ -263,7 +263,9 @@ per-file sizes, timings, totals, and medians.
 ## Development and tests
 
 Correctness is proven by rendering: the test suite renders original and
-optimized documents with [resvg] at 512 px and compares pixels. At most
+optimized documents with [resvg] at 512 px and compares pixels, composited
+over black and over white so that only differences some background could
+display are counted. At most
 0.2 % of pixels may differ by more than 8/255 per channel, and at most
 0.02 % by more than 64/255; when not a single pixel exceeds 64/255, up to
 0.5 % may carry the smaller anti-aliasing shifts. Any corpus file beyond
