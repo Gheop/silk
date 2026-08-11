@@ -978,8 +978,22 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
+	// A control point that exactly coincides with its anchor is a degenerate
+	// handle: the tangent it denotes has no direction, and the rebasing
+	// residue must not invent one — a stroke cap or join renders whatever
+	// direction the residue happens to point in. Pin it to the emitted
+	// anchor instead.
+	c1relX, c1relY, c1absX, c1absY := c1x-st.ecx, c1y-st.ecy, c1x, c1y
+	if !isSmoothIn && c1x == st.cx && c1y == st.cy {
+		c1relX, c1relY, c1absX, c1absY = 0, 0, st.ecx, st.ecy
+	}
+	c2relX, c2relY, c2absX, c2absY := c2x-st.ecx, c2y-st.ecy, c2x, c2y
+	if c2x == x && c2y == y {
+		c2relX, c2relY = et.x-st.ecx, et.y-st.ecy
+		c2absX, c2absY = et.x, et.y
+	}
 	lp := et.withMin(st.dirPrec(
-		c1x-st.ecx, c1y-st.ecy, // start tangent
+		c1relX, c1relY, // start tangent (zero when pinned: no direction)
 		c2x-c1x, c2y-c1y, // control-polygon edge
 		et.x-c2x, et.y-c2y, // end tangent
 		et.x-st.ecx, et.y-st.ecy)) // chord
@@ -994,22 +1008,22 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	if smoothOK {
 		cs = append(cs,
 			cand{op: 's', prec: lp,
-				nargs: 4, args: [7]float64{c2x - st.ecx, c2y - st.ecy, et.x - st.ecx, et.y - st.ecy},
+				nargs: 4, args: [7]float64{c2relX, c2relY, et.x - st.ecx, et.y - st.ecy},
 				endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
-				c2x: st.ecx + ql(c2x-st.ecx), c2y: st.ecy + ql(c2y-st.ecy)},
+				c2x: st.ecx + ql(c2relX), c2y: st.ecy + ql(c2relY)},
 			cand{op: 'S', prec: lp,
-				nargs: 4, args: [7]float64{c2x, c2y, et.x, et.y},
-				endX: ql(et.x), endY: ql(et.y), c2x: ql(c2x), c2y: ql(c2y)})
+				nargs: 4, args: [7]float64{c2absX, c2absY, et.x, et.y},
+				endX: ql(et.x), endY: ql(et.y), c2x: ql(c2absX), c2y: ql(c2absY)})
 	}
 	if !isSmoothIn {
 		cs = append(cs,
 			cand{op: 'c', prec: lp,
-				nargs: 6, args: [7]float64{c1x - st.ecx, c1y - st.ecy, c2x - st.ecx, c2y - st.ecy, et.x - st.ecx, et.y - st.ecy},
+				nargs: 6, args: [7]float64{c1relX, c1relY, c2relX, c2relY, et.x - st.ecx, et.y - st.ecy},
 				endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
-				c2x: st.ecx + ql(c2x-st.ecx), c2y: st.ecy + ql(c2y-st.ecy)},
+				c2x: st.ecx + ql(c2relX), c2y: st.ecy + ql(c2relY)},
 			cand{op: 'C', prec: lp,
-				nargs: 6, args: [7]float64{c1x, c1y, c2x, c2y, et.x, et.y},
-				endX: ql(et.x), endY: ql(et.y), c2x: ql(c2x), c2y: ql(c2y)})
+				nargs: 6, args: [7]float64{c1absX, c1absY, c2absX, c2absY, et.x, et.y},
+				endX: ql(et.x), endY: ql(et.y), c2x: ql(c2absX), c2y: ql(c2absY)})
 	}
 	// A cubic whose two quadratic pullbacks agree is an elevated quadratic:
 	// the same curve within the rounding budget, two arguments fewer. A
@@ -1084,8 +1098,17 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 	}
 	st.flushPending()
 	et := st.endpointFor(x, y)
+	// Same degenerate-handle pin as cubicTo: a control on its anchor means
+	// "no tangent", and the rebasing residue must not give it one.
+	qrelX, qrelY, qabsX, qabsY := qx-st.ecx, qy-st.ecy, qx, qy
+	if !isSmoothIn && qx == st.cx && qy == st.cy {
+		qrelX, qrelY, qabsX, qabsY = 0, 0, st.ecx, st.ecy
+	} else if qx == x && qy == y {
+		qrelX, qrelY = et.x-st.ecx, et.y-st.ecy
+		qabsX, qabsY = et.x, et.y
+	}
 	lp := et.withMin(st.dirPrec(
-		qx-st.ecx, qy-st.ecy, // start tangent
+		qrelX, qrelY, // start tangent (zero when pinned: no direction)
 		et.x-qx, et.y-qy, // end tangent
 		et.x-st.ecx, et.y-st.ecy)) // chord
 	ql := func(v float64) float64 { return quantize(v, lp) }
@@ -1102,11 +1125,11 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 	if !isSmoothIn {
 		cs = append(cs,
 			cand{op: 'q', prec: lp,
-				nargs: 4, args: [7]float64{qx - st.ecx, qy - st.ecy, et.x - st.ecx, et.y - st.ecy},
+				nargs: 4, args: [7]float64{qrelX, qrelY, et.x - st.ecx, et.y - st.ecy},
 				endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
-				qcx: st.ecx + ql(qx-st.ecx), qcy: st.ecy + ql(qy-st.ecy)},
-			cand{op: 'Q', prec: lp, nargs: 4, args: [7]float64{qx, qy, et.x, et.y},
-				endX: ql(et.x), endY: ql(et.y), qcx: ql(qx), qcy: ql(qy)})
+				qcx: st.ecx + ql(qrelX), qcy: st.ecy + ql(qrelY)},
+			cand{op: 'Q', prec: lp, nargs: 4, args: [7]float64{qabsX, qabsY, et.x, et.y},
+				endX: ql(et.x), endY: ql(et.y), qcx: ql(qabsX), qcy: ql(qabsY)})
 	}
 	win := st.choose(cs)
 	st.eqcx, st.eqcy = win.qcx, win.qcy

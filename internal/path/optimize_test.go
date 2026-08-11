@@ -2,6 +2,7 @@ package path
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -282,5 +283,24 @@ func TestCollinearLineMerge(t *testing.T) {
 		if got := opt(t, tc.in, tc.o); got != tc.want {
 			t.Errorf("collinear(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestZeroHandleSurvivesRounding(t *testing.T) {
+	// A control point exactly on its anchor is a degenerate handle ("no
+	// tangent"); the drift-free rebasing residue must not turn it into a
+	// tiny handle pointing in an arbitrary direction — stroke caps and
+	// joins render that direction.
+	// At the start of a path, s encodes the zero handle exactly (the
+	// derived reflection is the current point itself).
+	out := opt(t, "M146.7591 175.40436c0 0-7.82302-4.71921-11.60407-14.51191", Options{Precision: 3})
+	if !strings.HasPrefix(out, "M146.759 175.404s") {
+		t.Errorf("start zero handle: %s", out)
+	}
+	// Mid-path the reflection differs, so the c form must pin the handle to
+	// the emitted anchor instead of emitting the rebasing residue.
+	out = opt(t, "M.12345.12345c2 0 4 2 4.6789 4.6789c0 0-1.5-3-4.1234-5.1234", Options{Precision: 2})
+	if !strings.Contains(out, " 0 0-1.5") || strings.Contains(out, "e-") {
+		t.Errorf("mid-path zero handle lost: %s", out)
 	}
 }
