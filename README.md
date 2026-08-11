@@ -1,36 +1,26 @@
 # silk
 
+`silk` makes SVG files smaller without changing what they look like. It
+rewrites path geometry and document structure in pure Go — no cgo, no Node
+toolchain — and any construct it cannot prove safe to rewrite is emitted
+byte-for-byte unchanged. It is built for services that optimize
+user-supplied SVGs in-process, where a visual change, a panic, or a
+multi-second subprocess per file is not an option.
+
 [![ci](https://github.com/Gheop/silk/actions/workflows/ci.yml/badge.svg)](https://github.com/Gheop/silk/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Gheop/silk.svg)](https://pkg.go.dev/github.com/Gheop/silk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-`silk` shrinks SVG files by rewriting path geometry and document structure,
-in pure Go — no cgo, no external runtime. It covers the parts of Node's
-`svgo` that actually matter for size (`convertPathData`, `mergePaths`, and a
-handful of safe structural passes) for services that cannot embed a Node
-toolchain. The output renders identically to the input: any construct whose
-optimization cannot be proven safe is emitted byte-for-byte unchanged.
+## Quick start
 
-## Install
-
-```
-go get github.com/Gheop/silk
-```
-
-A small CLI is included:
-
-```
-go run github.com/Gheop/silk/cmd/silk@latest -precision 3 input.svg > output.svg
-```
-
-Or as a container image (GitHub and GitLab registries):
+Run the container image. It reads an SVG on stdin and writes the optimized
+SVG to stdout:
 
 ```
 docker run -i ghcr.io/gheop/silk < input.svg > output.svg
-docker run -i registry.gitlab.com/gheop/silk < input.svg > output.svg
 ```
 
-## Usage
+Or call the library from Go:
 
 ```go
 out, err := silk.Optimize(svgBytes, silk.DefaultOptions())
@@ -39,48 +29,117 @@ if err != nil {
 }
 ```
 
-### Options
+## Installation
 
-```go
-type Options struct {
-    // Precision is the maximum number of decimal places kept for coordinates
-    // and path data. 0 means exact (no rounding). Rounding is the single
-    // biggest lever and the main fidelity risk, so it is opt-in and bounded.
-    Precision int
+silk needs Go 1.25 or later.
 
-    // TransformPrecision rounds transform translation components when > 0.
-    // By default transforms are only rewritten losslessly: rounding a group
-    // translation shifts whole subtrees coherently, which sub-pixel patterns
-    // turn into visible moiré.
-    TransformPrecision int
+### Go module
 
-    // Multipass reruns the pass pipeline until the byte length stops
-    // shrinking, bounded by MaxPasses (default 8 when Multipass is true).
-    Multipass bool
-    MaxPasses int
-}
+Add the library to your project:
+
+```
+go get github.com/Gheop/silk
 ```
 
-`DefaultOptions()` returns `{Precision: 3, Multipass: true}`.
+### CLI
 
-The zero value of `Options` is safe and conservative: exact numbers, no
-rounding, minimal passes.
+Install the command:
 
-## Guarantees
+```
+go install github.com/Gheop/silk/cmd/silk@latest
+```
 
-- **Visually lossless.** The result renders identically to the input within
-  the configured precision tolerance, verified pixel-by-pixel over a corpus
-  of 50 real-world files. Fidelity-sensitive spots automatically keep more
-  precision than asked: tiny segments whose direction stroke joins amplify,
-  near-degenerate arcs, almost-closed subpaths; segment removal stays off
-  under filters, whose regions sample the geometry.
-- **Deterministic.** Identical `(svg, opts)` yields byte-identical output.
-- **Idempotent.** `Optimize(Optimize(x)) == Optimize(x)`, byte for byte. The
-  pipeline runs to a byte fixed point; if none is reached the input is
-  returned unchanged.
-- **Total.** Never panics, never loops forever, bounded memory — including
-  on malformed, hostile, or truncated input (continuously fuzzed). On
-  unparseable input it returns `(nil, error)` so the caller can fall back.
+You can also run it without installation:
+
+```
+go run github.com/Gheop/silk/cmd/silk@latest input.svg > output.svg
+```
+
+### Container image
+
+The image is published to two registries. Each release tag `vX.Y.Z`
+publishes `X.Y.Z` and updates `latest`:
+
+```
+docker pull ghcr.io/gheop/silk:0.4.0
+docker pull registry.gitlab.com/gheop/silk:0.4.0
+```
+
+The image is built from `scratch` and contains only the static binary.
+
+### From source
+
+```
+git clone https://github.com/Gheop/silk
+cd silk
+go build ./cmd/silk
+```
+
+## Usage
+
+### Library
+
+Call `Optimize` with the SVG bytes and the options:
+
+```go
+out, err := silk.Optimize(svgBytes, silk.DefaultOptions())
+```
+
+On success, `out` holds the optimized document. On unparseable input, the
+function returns `(nil, error)`. The input bytes are never modified.
+
+### CLI
+
+The command reads one file, or stdin when you give no file. It writes the
+result to stdout:
+
+```
+silk input.svg > output.svg
+silk < input.svg > output.svg
+silk -precision 2 input.svg > output.svg
+```
+
+### Container
+
+The container reads stdin and writes stdout. Pass CLI flags after the
+image name:
+
+```
+docker run -i ghcr.io/gheop/silk:0.4.0 -precision 2 < input.svg > output.svg
+```
+
+## Configuration
+
+### Library options
+
+```go
+out, err := silk.Optimize(svgBytes, silk.Options{Precision: 3, Multipass: true})
+```
+
+| Field | Type | Zero value means | Description |
+|---|---|---|---|
+| `Precision` | `int` | exact, no rounding | Maximum number of decimal places kept for coordinates and path data. Rounding is the biggest size lever and the main fidelity risk, so it is opt-in and bounded. |
+| `TransformPrecision` | `int` | transforms stay exact | Rounds transform translation components when > 0. By default transforms are only rewritten losslessly: rounding a group translation shifts whole subtrees coherently, which sub-pixel patterns turn into visible moiré. |
+| `Multipass` | `bool` | fewer shrinking passes | Reruns the pass pipeline until the byte length stops shrinking, bounded by `MaxPasses`. |
+| `MaxPasses` | `int` | 8 when `Multipass` is set | Upper bound on shrinking passes. |
+
+`DefaultOptions()` returns `{Precision: 3, Multipass: true}`. The zero
+value of `Options` is safe and conservative: exact numbers, no rounding,
+minimal passes.
+
+### CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `-precision N` | `3` | Decimal places kept for coordinates; `0` keeps exact values. |
+| `-transform-precision N` | `0` | Decimal places for transform translations; `0` keeps exact values. |
+| `-single-pass` | off | Run the pipeline once instead of until stable. |
+
+### Environment variables
+
+| Variable | Used by | Description |
+|---|---|---|
+| `SILK_CORPUS` | tests only | Path to a directory of SVG files for the fidelity and round-trip test suites. Defaults to `testdata/corpus` (empty in this repository). The library and CLI read no environment variables. |
 
 ## What it does
 
@@ -121,6 +180,23 @@ resolved, so anything they might match is preserved.
 Out of scope: sanitization (scripts, event handlers, external references are
 not removed — run a sanitizer first), rasterization, SVG generation, and
 animation.
+
+## Guarantees
+
+- **Visually lossless.** The result renders identically to the input within
+  the configured precision tolerance, verified pixel-by-pixel over a corpus
+  of 100 real-world files. Fidelity-sensitive spots automatically keep more
+  precision than asked: tiny segments whose direction stroke joins amplify,
+  near-degenerate arcs, almost-closed subpaths; segment removal stays off
+  under filters, whose regions sample the geometry.
+- **Deterministic.** Identical `(svg, opts)` yields byte-identical output.
+- **Idempotent.** `Optimize(Optimize(x)) == Optimize(x)`, byte for byte. The
+  pipeline runs to a byte fixed point; if none is reached the input is
+  returned unchanged.
+- **Total.** Never panics, never loops forever, bounded memory — including
+  on malformed, hostile, or truncated input (fuzzed, with a fuzz smoke run
+  on every CI push). On unparseable input it returns `(nil, error)` so the
+  caller can fall back.
 
 ## Benchmark
 
@@ -180,25 +256,39 @@ Speed, in-process: small icons in ~50 µs, the 1.5 MiB single-path scans in
 0.7-16 s per file on the same machine including Node startup — 10-180×
 slower for a service invoking it per image.
 
-## Fidelity harness
+To reproduce, run `scripts/bench.sh CORPUS_DIR` — it builds the CLI,
+runs silk and `npx svgo` on every `.svg` under `CORPUS_DIR`, and prints
+per-file sizes, timings, totals, and medians.
 
-Correctness is proven by rendering, not inspection. The test suite renders
-original and optimized documents with [resvg] at 512 px and compares pixels:
-at most 0.2 % of pixels may differ by more than 8/255 per channel, and at
-most 0.02 % by more than 64/255; when not a single pixel exceeds 64/255,
-up to 0.5 % may carry the smaller anti-aliasing shifts. Any corpus file
-beyond that fails the suite.
+## Development and tests
+
+Correctness is proven by rendering: the test suite renders original and
+optimized documents with [resvg] at 512 px and compares pixels. At most
+0.2 % of pixels may differ by more than 8/255 per channel, and at most
+0.02 % by more than 64/255; when not a single pixel exceeds 64/255, up to
+0.5 % may carry the smaller anti-aliasing shifts. Any corpus file beyond
+that fails the suite.
 
 ```
 # resvg must be on PATH (tests skip cleanly without it)
 go test ./...
 ```
 
-The corpus location is set in `silk_test.go` (`corpusDir`); point it at any
-directory of SVG files.
+The corpus is not distributed with the repository. Point the fidelity and
+round-trip suites at any directory of SVG files:
+
+```
+SILK_CORPUS=/path/to/svgs go test ./...
+```
+
+Without a corpus, the corpus-driven tests skip and the unit tests still
+run.
 
 Fuzzing: `go test -fuzz=FuzzOptimize .` exercises the whole optimizer;
-`go test -fuzz=FuzzParse ./internal/path/` exercises the path grammar.
+`go test -fuzz=FuzzParse ./internal/path/` exercises the path grammar. CI
+(GitHub Actions and GitLab) runs `gofmt`, `go vet`, the test suite, and a
+20-second fuzz smoke on every push; a `v*` tag builds and publishes the
+container images to both registries.
 
 [resvg]: https://github.com/linebender/resvg
 
@@ -207,6 +297,20 @@ Fuzzing: `go test -fuzz=FuzzOptimize .` exercises the whole optimizer;
 silk is the SVG stage of [patu.dev](https://patu.dev), an asset compression
 API: POST a raw file, get the optimized bytes back. The benchmark corpus
 above is drawn from its real-world workload.
+
+## Contributing
+
+Open an issue before a large change; the safety guarantees constrain which
+optimizations are acceptable, and it is cheaper to discuss the gate first.
+Before you send a pull request, run `gofmt`, `go vet ./...`, and
+`go test ./...` — CI enforces all three.
+
+TODO: document how to obtain or rebuild a benchmark corpus for
+contributors (the reference corpus is not public).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
