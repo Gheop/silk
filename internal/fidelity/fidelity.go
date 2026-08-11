@@ -81,20 +81,41 @@ func RenderDiff(dir string, original, optimized []byte) (Result, error) {
 	return diffImages(a, b), nil
 }
 
+// pixDiff returns the worst visible per-channel difference between two
+// unpremultiplied pixels, measured after compositing over black and over
+// white. RGB under low alpha is arbitrary in the format; comparing it raw
+// manufactures differences no background can display. The composite is
+// linear in the background value, so the two extremes bound every uniform
+// background. Scale: 0-255, like the raw channel comparison it replaces.
+func pixDiff(src, dst []uint8) int {
+	aa, ab := int(src[3]), int(dst[3])
+	dAlpha := 255 * (aa - ab)
+	m := 0
+	for c := 0; c < 3; c++ {
+		d := int(src[c])*aa - int(dst[c])*ab // over black, ×255
+		if dw := d - dAlpha; dw < 0 {        // over white, ×255
+			dw = -dw
+			if dw > m {
+				m = dw
+			}
+		} else if dw > m {
+			m = dw
+		}
+		if d < 0 {
+			d = -d
+		}
+		if d > m {
+			m = d
+		}
+	}
+	return m / 255
+}
+
 func diffImages(a, b *image.NRGBA) Result {
 	w, h := a.Bounds().Dx(), a.Bounds().Dy()
 	res := Result{TotalPixels: w * h}
 	for i := 0; i < len(a.Pix); i += 4 {
-		m := 0
-		for c := 0; c < 4; c++ {
-			d := int(a.Pix[i+c]) - int(b.Pix[i+c])
-			if d < 0 {
-				d = -d
-			}
-			if d > m {
-				m = d
-			}
-		}
+		m := pixDiff(a.Pix[i:i+4], b.Pix[i:i+4])
 		if m > res.MaxDiff {
 			res.MaxDiff = m
 		}
@@ -132,17 +153,7 @@ func nearbyMatch(src, dst *image.NRGBA, w, h, i int) bool {
 				continue
 			}
 			j := (ny*w + nx) * 4
-			m := 0
-			for c := 0; c < 4; c++ {
-				d := int(src.Pix[i+c]) - int(dst.Pix[j+c])
-				if d < 0 {
-					d = -d
-				}
-				if d > m {
-					m = d
-				}
-			}
-			if m <= softDiff {
+			if pixDiff(src.Pix[i:i+4], dst.Pix[j:j+4]) <= softDiff {
 				return true
 			}
 		}
