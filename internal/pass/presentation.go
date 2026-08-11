@@ -209,6 +209,23 @@ func optimizeStyleAttr(n *dom.Node, refs *Refs, prec int) {
 	if !ok {
 		return
 	}
+	// The CSS shorthands marker and font have no attribute form, so they
+	// always stay in the style. A longhand of the same family must then stay
+	// beside them: inside one style attribute the later declaration wins,
+	// but a style always outranks a presentation attribute, so extracting
+	// the longhand would hand the shorthand a win it never had.
+	pinnedFamily := map[string]bool{}
+	for _, d := range decls {
+		if d.prop == "marker" || d.prop == "font" {
+			pinnedFamily[d.prop] = true
+		}
+	}
+	inPinnedFamily := func(prop string) bool {
+		if i := strings.IndexByte(prop, '-'); i > 0 {
+			return pinnedFamily[prop[:i]]
+		}
+		return false
+	}
 	var kept []decl
 	for _, d := range decls {
 		if strings.Contains(d.val, "!") {
@@ -227,13 +244,18 @@ func optimizeStyleAttr(n *dom.Node, refs *Refs, prec int) {
 				d.val = s
 			}
 		}
-		if isDroppableDefault(n, refs, d.prop, strings.ToLower(d.val)) {
+		// A declaration is only removable when nothing it outranks could
+		// resurface: a stylesheet rule (any prop, style attr wins over it) or
+		// a different-valued presentation attribute on this same element.
+		if !refs.HasStylesheet && !declMasksAttr(n, d.prop, d.val) &&
+			!inPinnedFamily(d.prop) &&
+			isDroppableDefault(n, refs, d.prop, strings.ToLower(d.val)) {
 			continue
 		}
 		// Inline style outranks stylesheet rules; a presentation attribute
 		// does not. Without a stylesheet they are equivalent, and the
 		// attribute form is shorter.
-		if !refs.HasStylesheet && presentationProps[d.prop] {
+		if !refs.HasStylesheet && presentationProps[d.prop] && !inPinnedFamily(d.prop) {
 			n.SetAttr(d.prop, d.val)
 			continue
 		}
@@ -288,6 +310,28 @@ func optimizeColorAttrs(n *dom.Node, refs *Refs) {
 			}
 		}
 	}
+}
+
+// declMasksAttr reports whether a style declaration for prop shadows a
+// presentation attribute with a different value on the same element. Such a
+// declaration is load-bearing even at the property's initial value: dropping
+// it would reveal the attribute.
+func declMasksAttr(n *dom.Node, prop, val string) bool {
+	if !n.HasAttr(prop) {
+		return false
+	}
+	av, ok := n.AttrValue(prop)
+	if !ok {
+		return true // opaque attribute value: assume it differs
+	}
+	norm := func(s string) string {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if colorProps[prop] {
+			return shortestColor(s)
+		}
+		return s
+	}
+	return norm(av) != norm(val)
 }
 
 // isDroppableDefault reports whether prop:val is the property's initial

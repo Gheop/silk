@@ -172,3 +172,53 @@ func TestRoundNumericAttrs(t *testing.T) {
 		}
 	}
 }
+
+func TestInitialValueDeclKeptWhenMaskingAttr(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// The declaration is at fill's initial value but shadows a different
+		// attribute: it must not vanish and leave the attribute in charge.
+		// It overwrites the attribute, which then drops as a true default —
+		// the element renders black (initial fill) as it always did.
+		{`<path fill="#a12821" style="fill:#000000" d="M0 0"/>`,
+			`<path d="M0 0"/>`},
+		// Same for a non-inherited property.
+		{`<path opacity=".5" style="opacity:1" d="M0 0"/>`,
+			`<path d="M0 0"/>`},
+		// Attribute and declaration agree: both are droppable defaults.
+		{`<path fill="black" style="fill:#000000" d="M0 0"/>`,
+			`<path d="M0 0"/>`},
+	}
+	for _, tc := range cases {
+		in := `<svg>` + tc.in + `</svg>`
+		want := `<svg>` + tc.want + `</svg>`
+		if got := runPresentation(t, in, 3); got != want {
+			t.Errorf("masking decl(%q)\n got: %q\nwant: %q", tc.in, got, want)
+		}
+	}
+}
+
+func TestInitialValueDeclKeptUnderStylesheet(t *testing.T) {
+	// A stylesheet rule is outranked by the style attribute, so even an
+	// initial-value declaration is load-bearing while a stylesheet exists.
+	in := `<svg><style>path{opacity:.5}</style><path style="opacity:1" d="M0 0"/></svg>`
+	if got := runPresentation(t, in, 3); !strings.Contains(got, "opacity:1") {
+		t.Errorf("initial-value decl dropped under stylesheet: %q", got)
+	}
+}
+
+func TestShorthandPinsLonghandsInStyle(t *testing.T) {
+	// marker (CSS shorthand, no attribute form) stays in style; marker-end
+	// after it overrides it there. Extracted to an attribute, marker-end
+	// would lose to the style — so it must stay in the style too.
+	in := `<path style="marker:none;marker-end:url(#a)" d="M0 0h9"/>`
+	got := runPresentation(t, `<svg>`+in+`</svg>`, 3)
+	if !strings.Contains(got, `style="marker:none;marker-end:url(#a)"`) {
+		t.Errorf("marker-end left its shorthand behind: %q", got)
+	}
+	// Same family via font; unrelated props still convert.
+	in2 := `<path style="font:10px serif;font-size:12px;fill:red" d="M0 0h9"/>`
+	got2 := runPresentation(t, `<svg>`+in2+`</svg>`, 3)
+	if !strings.Contains(got2, `font:10px serif;font-size:12px`) || !strings.Contains(got2, `fill="red"`) {
+		t.Errorf("font family handling wrong: %q", got2)
+	}
+}
