@@ -64,7 +64,14 @@ func becomePath(n *dom.Node, d []byte, drop ...string) {
 		n.RemoveAttr(name)
 	}
 	n.SetAttr("d", string(d))
-	n.Rename("path")
+	// Keep the namespace prefix: a prefixed shape resolves through the
+	// prefix, and dropping it would rebind the element to whatever default
+	// namespace is in scope.
+	if i := strings.IndexByte(n.Name, ':'); i >= 0 {
+		n.Rename(n.Name[:i+1] + "path")
+	} else {
+		n.Rename("path")
+	}
 }
 
 func convertLine(n *dom.Node) {

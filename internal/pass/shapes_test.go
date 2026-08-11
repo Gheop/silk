@@ -1,6 +1,7 @@
 package pass
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Gheop/silk/internal/dom"
@@ -46,5 +47,15 @@ func TestConvertShapes(t *testing.T) {
 		if got := runShapes(t, tc.in); got != tc.want {
 			t.Errorf("ConvertShapes(%q)\n got: %q\nwant: %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestConvertShapesKeepsPrefix(t *testing.T) {
+	// A prefixed shape resolves its namespace through the prefix; dropping
+	// it on rename would rebind the element to the in-scope default.
+	in := `<svg xmlns="http://www.w3.org/2000/svg"><s:g xmlns="urn:x" xmlns:s="http://www.w3.org/2000/svg"><s:rect x="1" y="1" width="2" height="3"/></s:g></svg>`
+	got := runShapes(t, in)
+	if !strings.Contains(got, "<s:path") {
+		t.Errorf("prefix lost on shape conversion: %q", got)
 	}
 }
