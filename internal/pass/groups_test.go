@@ -60,3 +60,18 @@ func TestCollapseGroups(t *testing.T) {
 		}
 	}
 }
+
+func TestCollapseGroupsKeepsSwitchChildren(t *testing.T) {
+	// <switch> renders only its first eligible child: unwrapping a child
+	// group would promote its content to competing switch alternatives.
+	in := `<svg><switch><g><path d="M0 0"/><path d="M9 9"/></g></switch></svg>`
+	if got := runGroups(t, in); got != in {
+		t.Errorf("switch child collapsed:\n got: %q\nwant: %q", got, in)
+	}
+	// Nested below a switch child, collapsing is fine again.
+	in2 := `<svg><switch><g systemLanguage="fr"><g><path d="M0 0"/></g></g></switch></svg>`
+	want2 := `<svg><switch><g systemLanguage="fr"><path d="M0 0"/></g></switch></svg>`
+	if got := runGroups(t, in2); got != want2 {
+		t.Errorf("nested collapse under switch child:\n got: %q\nwant: %q", got, want2)
+	}
+}

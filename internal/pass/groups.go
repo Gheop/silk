@@ -44,7 +44,7 @@ func CollapseGroups(doc *dom.Node, refs *Refs) {
 }
 
 func collapseGroup(g *dom.Node, refs *Refs) bool {
-	if localName(g.Name) != "g" || g.Parent == nil {
+	if localName(g.Name) != "g" || g.Parent == nil || underSwitch(g) {
 		return false
 	}
 	if g.HasAttr("id") {

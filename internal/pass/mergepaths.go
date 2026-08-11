@@ -36,6 +36,9 @@ type merger struct {
 }
 
 func (m *merger) mergeChildren(parent *dom.Node) {
+	if parent.Kind == dom.KindElement && localName(parent.Name) == "switch" {
+		return
+	}
 	i := 0
 	for i < len(parent.Children)-1 {
 		a := parent.Children[i]

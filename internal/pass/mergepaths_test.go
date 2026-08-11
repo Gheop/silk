@@ -65,3 +65,13 @@ func TestMergePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestMergePathsKeepsSwitchChildren(t *testing.T) {
+	// Direct children of <switch> are alternatives, not layers: only the
+	// first eligible one renders, so merging would graft never-rendered
+	// geometry onto it.
+	in := `<svg><switch><path d="M0 0h1" systemLanguage="fr"/><path d="M10 0h1"/></switch></svg>`
+	if got := runMerge(t, in); got != in {
+		t.Errorf("switch children merged:\n got: %q\nwant: %q", got, in)
+	}
+}

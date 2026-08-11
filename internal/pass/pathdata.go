@@ -222,6 +222,15 @@ func localName(name string) string {
 	return name
 }
 
+// underSwitch reports whether n is a direct child of a <switch> element.
+// <switch> renders only its first eligible child, so the identity, count and
+// order of its children are semantic: unwrapping, removing or merging them
+// changes which subtree renders.
+func underSwitch(n *dom.Node) bool {
+	return n.Parent != nil && n.Parent.Kind == dom.KindElement &&
+		localName(n.Parent.Name) == "switch"
+}
+
 // noopSafeDoc reports whether zero-length segments can be dropped anywhere in
 // the document. A stylesheet could set stroke or markers through selectors we
 // do not resolve, and <use> can re-render a path under different inherited
