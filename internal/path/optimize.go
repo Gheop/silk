@@ -1,8 +1,6 @@
 package path
 
-import (
-	"math"
-)
+import "math"
 
 // Options controls path-data optimization.
 type Options struct {
@@ -58,7 +56,7 @@ func run(cs []Cmd, o Options, collect bool) ([]byte, []Cmd) {
 		// tolerance. Arc conversion removes vertices the same way straight-
 		// ening does (markers would show it), hence the shared gate.
 		cs = mergeCollinear(cs, tolAt(prec)/2)
-		cs = convertArcs(cs, tolAt(prec)/2, prec)
+		cs = convertArcs(cs, tolAt(prec)/2, prec, o.RemoveNoops)
 	}
 	st := state{o: o, prec: prec, tol: tolAt(prec), collect: collect}
 	// Pre-size the growth points: ~10 bytes per emitted command, one emitted
@@ -319,7 +317,7 @@ type arcSeg struct {
 // Every sample must stay within the tube around the circle, and the run
 // keeps a single rotation direction with total sweep under 2π (an arc whose
 // endpoints coincide renders as nothing).
-func convertArcs(cs []Cmd, tol float64, prec int) []Cmd {
+func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
 	if tol <= 0 {
 		return cs
 	}
@@ -415,7 +413,7 @@ func convertArcs(cs []Cmd, tol float64, prec int) []Cmd {
 			continue
 		}
 		c1x, c1y, c2x, c2y, x, y := cubicAbs(i)
-		fit, delta, ok := fitArcCircle(cx, cy, c1x, c1y, c2x, c2y, x, y, tol, prec)
+		fit, delta, ok := fitArcCircle(cx, cy, c1x, c1y, c2x, c2y, x, y, tol, prec, strokeSafe)
 		if !ok {
 			copyCubic(i)
 			i++
@@ -437,7 +435,7 @@ func convertArcs(cs []Cmd, tol float64, prec int) []Cmd {
 			cx, cy, pc2x, pc2y, prevCubic = gx, gy, gc2x, gc2y, true
 			d1x, d1y, d2x, d2y, nx, ny := cubicAbs(j)
 			cx, cy, pc2x, pc2y, prevCubic = sc, ss, spc, spq, wasCubic
-			d, ok := onCircle(fit, gx, gy, d1x, d1y, d2x, d2y, nx, ny, tol)
+			d, ok := onCircle(fit, gx, gy, d1x, d1y, d2x, d2y, nx, ny, tol, strokeSafe)
 			if !ok || sweepOf(group)+d > 3.8*math.Pi {
 				break
 			}
@@ -455,7 +453,56 @@ func convertArcs(cs []Cmd, tol float64, prec int) []Cmd {
 			i++
 			continue
 		}
-		emit := func(segs []arcSeg) {
+		// The renderer re-derives the centre from (radius, chord); near the
+		// half turn that square root is ill-conditioned and a sub-tolerance
+		// radius or chord change moves the arc by sqrt(Δ·2r) — pixels, not
+		// sub-pixels. Every emitted segment must therefore reconstruct, with
+		// the emitted radius and a chord perturbed by the worst endpoint
+		// rounding, to within the fit's own tube.
+		remit := fit.r
+		if prec >= 0 {
+			remit = quantize(fit.r, prec)
+		}
+		segStart := func(k int) (float64, float64) {
+			if k == 0 {
+				return cx, cy // current point before the run, not the first cubic's end
+			}
+			return group[k-1].ex, group[k-1].ey
+		}
+		stable := func(k int, segs []arcSeg) bool {
+			s := sweepOf(segs)
+			if s > 1.9*math.Pi {
+				return false
+			}
+			sx, sy := segStart(k)
+			last := segs[len(segs)-1]
+			dx, dy := last.ex-sx, last.ey-sy
+			l := math.Hypot(dx, dy)
+			if l == 0 {
+				return false
+			}
+			sag := fit.r
+			if disc := fit.r*fit.r - l*l/4; disc > 0 {
+				sag = l * l / 4 / (fit.r + math.Sqrt(disc))
+			}
+			tube := arcTube(fit.r, sag, tol, strokeSafe)
+			eps := 0.0
+			if prec >= 0 {
+				eps = 2 * math.Sqrt2 * tolAt(prec)
+			}
+			for _, e := range [...]float64{0, eps, -eps} {
+				px, py := last.ex+e*dx/l, last.ey+e*dy/l
+				rcx, rcy, rr, ok := arcRenderCenter(remit, sx, sy, px, py, s > math.Pi, fit.ccw)
+				if !ok || math.Hypot(rcx-fit.cx, rcy-fit.cy)+math.Abs(rr-fit.r) > tube {
+					return false
+				}
+				if eps == 0 {
+					break
+				}
+			}
+			return true
+		}
+		emit := func(k int, segs []arcSeg) {
 			s := sweepOf(segs)
 			last := segs[len(segs)-1]
 			laf, sf := 0.0, 0.0
@@ -465,26 +512,36 @@ func convertArcs(cs []Cmd, tol float64, prec int) []Cmd {
 			if fit.ccw {
 				sf = 1
 			}
-			out = append(out, Cmd{Op: 'A', Args: []float64{fit.r, fit.r, 0, laf, sf, last.ex, last.ey}})
+			out = append(out, Cmd{Op: 'A', Args: []float64{remit, remit, 0, laf, sf, last.ex, last.ey}})
 		}
-		// One endpoint arc cannot span 2π (coincident endpoints render as
-		// nothing); a run that far — the common full circle — splits at the
-		// boundary nearest half the sweep.
-		if total := sweepOf(group); total > 1.9*math.Pi {
-			si, acc := 1, group[0].delta
-			for si < len(group)-1 && acc+group[si].delta < total/2 {
-				acc += group[si].delta
-				si++
+		// Prefer the coarsest stable splitting: the whole run when it can
+		// (an endpoint arc cannot span 2π — coincident endpoints render as
+		// nothing), otherwise greedy segments each validated for stability.
+		var spans [][2]int
+		if total := sweepOf(group); total <= 1.9*math.Pi && stable(0, group) {
+			spans = [][2]int{{0, len(group)}}
+		} else {
+			ok := true
+			for f := 0; f < len(group); {
+				t := f + 1
+				for t < len(group) && stable(f, group[f:t+1]) {
+					t++
+				}
+				if t == f+1 && !stable(f, group[f:t]) {
+					ok = false
+					break
+				}
+				spans = append(spans, [2]int{f, t})
+				f = t
 			}
-			if sweepOf(group[:si]) > 1.95*math.Pi || sweepOf(group[si:]) > 1.95*math.Pi {
+			if !ok {
 				copyCubic(i)
 				i++
 				continue
 			}
-			emit(group[:si])
-			emit(group[si:])
-		} else {
-			emit(group)
+		}
+		for _, sp := range spans {
+			emit(sp[0], group[sp[0]:sp[1]])
 		}
 		last := group[len(group)-1]
 		cx, cy = last.ex, last.ey
@@ -492,6 +549,42 @@ func convertArcs(cs []Cmd, tol float64, prec int) []Cmd {
 		i += len(group)
 	}
 	return out
+}
+
+// arcRenderCenter mirrors the renderer's endpoint-arc centre reconstruction
+// (SVG spec F.6.5, circular case): radii too small for the chord scale up
+// uniformly, and the flag pair picks the side of the chord.
+func arcRenderCenter(r, p0x, p0y, pex, pey float64, laf, sf bool) (float64, float64, float64, bool) {
+	dx, dy := pex-p0x, pey-p0y
+	l2 := dx*dx + dy*dy
+	if l2 == 0 || r <= 0 {
+		return 0, 0, 0, false
+	}
+	l := math.Sqrt(l2)
+	if 2*r < l {
+		r = l / 2
+	}
+	h := 0.0
+	if disc := r*r - l2/4; disc > 0 {
+		h = math.Sqrt(disc)
+	}
+	s := 1.0
+	if laf == sf {
+		s = -1
+	}
+	return (p0x+pex)/2 - s*h*dy/l, (p0y+pey)/2 + s*h*dx/l, r, true
+}
+
+// arcTube is the deviation budget for swapping cubics and endpoint arcs.
+// Only provably unstroked, markerless geometry (the RemoveNoops
+// precondition) may use the radius-relative budget that admits the kappa
+// approximation: on a stroked outline the swap moves both stroke edges,
+// which hairlines turn into flipped pixels.
+func arcTube(r, sag, tol float64, strokeSafe bool) float64 {
+	if !strokeSafe {
+		return tol
+	}
+	return max(tol, min(5e-4*r, 0.01*sag, 0.5))
 }
 
 func sweepOf(group []arcSeg) float64 {
@@ -512,7 +605,7 @@ func bezierAt(t, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y float64) (float64, float
 // accepts it when the quarter samples stay inside the tube, the bulge is
 // deep enough to be genuinely curved (a near-flat fit puts the center far
 // away and unstably), and the sweep direction is consistent.
-func fitArcCircle(p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64, prec int) (arcFit, float64, bool) {
+func fitArcCircle(p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64, prec int, strokeSafe bool) (arcFit, float64, bool) {
 	mx, my := bezierAt(0.5, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y)
 	d := 2 * (p0x*(my-p3y) + mx*(p3y-p0y) + p3x*(p0y-my))
 	if math.Abs(d) < 1e-12 {
@@ -544,12 +637,12 @@ func fitArcCircle(p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64, prec int)
 	dm := math.Mod(am-a0+4*math.Pi, 2*math.Pi)
 	d1 := math.Mod(a1-a0+4*math.Pi, 2*math.Pi)
 	fit.ccw = dm < d1
-	delta, ok := onCircle(fit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol)
+	delta, ok := onCircle(fit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol, strokeSafe)
 	if !ok {
 		return arcFit{}, 0, false
 	}
 	if snapped, ok := snapRadius(fit, prec, p0x, p0y, p3x, p3y); ok {
-		if d, ok := onCircle(snapped, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol); ok {
+		if d, ok := onCircle(snapped, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol, strokeSafe); ok {
 			return snapped, d, true
 		}
 	}
@@ -598,13 +691,13 @@ func snapRadius(fit arcFit, prec int, p0x, p0y, p3x, p3y float64) (arcFit, bool)
 // stays within 1% of this segment's own bulge: a shallow sweep on a huge
 // circle is close to a straight stroke, where half a unit of drift is a
 // visibly displaced line. The original endpoints are kept exactly.
-func onCircle(fit arcFit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64) (float64, bool) {
+func onCircle(fit arcFit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64, strokeSafe bool) (float64, bool) {
 	chord2 := (p3x-p0x)*(p3x-p0x) + (p3y-p0y)*(p3y-p0y)
 	sag := fit.r
 	if disc := fit.r*fit.r - chord2/4; disc > 0 {
 		sag = chord2 / 4 / (fit.r + math.Sqrt(disc))
 	}
-	tube := max(tol, min(5e-4*fit.r, 0.01*sag, 0.5))
+	tube := arcTube(fit.r, sag, tol, strokeSafe)
 	for _, t := range [...]float64{0.25, 0.5, 0.75, 1} {
 		bx, by := bezierAt(t, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y)
 		if math.Abs(math.Hypot(bx-fit.cx, by-fit.cy)-fit.r) > tube {
