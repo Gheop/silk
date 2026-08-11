@@ -75,3 +75,12 @@ func TestMergePathsKeepsSwitchChildren(t *testing.T) {
 		t.Errorf("switch children merged:\n got: %q\nwant: %q", got, in)
 	}
 }
+
+func TestMergePathsKeepsMarkerCarriers(t *testing.T) {
+	// marker-end renders at the end of the whole path: joining two such
+	// paths deletes the marker at the seam even with identical attributes.
+	in := `<svg><path marker-end="url(#m)" d="M0 0h1"/><path marker-end="url(#m)" d="M10 0h1"/><marker id="m"><path d="M0 0h1v1z"/></marker></svg>`
+	if got := runMerge(t, in); got != in {
+		t.Errorf("marker paths merged:\n got: %q\nwant: %q", got, in)
+	}
+}

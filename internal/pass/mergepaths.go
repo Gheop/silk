@@ -81,6 +81,12 @@ func (m *merger) canMerge(a, b *dom.Node, acc *bbox) (bool, *bbox, string) {
 	if a.HasAttr("id") || b.HasAttr("id") {
 		return false, nil, ""
 	}
+	// marker-start/end render at the ends of the whole path, not of each
+	// subpath: joining two marker-carrying paths silently deletes the
+	// markers at the seam even when every attribute matches.
+	if !markerSafeElement(a) || !markerSafeElement(b) {
+		return false, nil, ""
+	}
 	if !sameAttrsExceptD(a, b) {
 		return false, nil, ""
 	}
