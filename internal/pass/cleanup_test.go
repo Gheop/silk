@@ -1,6 +1,7 @@
 package pass
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Gheop/silk/internal/dom"
@@ -172,5 +173,32 @@ func TestKeepsCommentsInsideStyle(t *testing.T) {
 	in := `<svg><style><!--x-->.a{fill:red}</style><path class="a" d="M0 0"/></svg>`
 	if got := runCleanup(t, in); got != in {
 		t.Errorf("style comment removed:\n got: %q\nwant: %q", got, in)
+	}
+}
+
+func TestKeepNamespacesWithDTDSubset(t *testing.T) {
+	// An entity's unexpanded text can use any prefix; the usage scan cannot
+	// see it, so a DTD internal subset pins every declaration.
+	in := `<!DOCTYPE svg [<!ENTITY R "<use xlink:href='#r'/>">]><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><g>&R;</g><rect id="r" width="1" height="1"/></svg>`
+	if got := runCleanup(t, in); !strings.Contains(got, "xmlns:xlink") {
+		t.Errorf("xlink declaration removed despite DTD subset: %q", got)
+	}
+}
+
+func TestXMLSpaceKeptOnTref(t *testing.T) {
+	// tref renders referenced characters; its own empty content proves
+	// nothing about them.
+	in := `<svg><defs><text id="t">a  b</text></defs><text><tref xml:space="preserve" href="#t"/></text></svg>`
+	if got := runCleanup(t, in); !strings.Contains(got, `xml:space="preserve"`) {
+		t.Errorf("xml:space dropped on tref: %q", got)
+	}
+}
+
+func TestDefsKeptUnderStylesheet(t *testing.T) {
+	// Used content matches CSS in its original tree position: the empty,
+	// unreferenced sibling satisfies the + selector for the used circle.
+	in := `<svg><style>.a+.b{fill:red}</style><defs><g class="a"></g><circle id="c" class="b" r="5"/></defs><use href="#c"/></svg>`
+	if got := runCleanup(t, in); !strings.Contains(got, `class="a"`) {
+		t.Errorf("structural sibling removed from defs under stylesheet: %q", got)
 	}
 }

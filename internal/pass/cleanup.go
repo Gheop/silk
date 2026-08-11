@@ -121,6 +121,12 @@ func plainCharData(e *dom.Node) bool {
 	plain := true
 	var walk func(n *dom.Node)
 	walk = func(n *dom.Node) {
+		if n.Kind == dom.KindElement && localName(n.Name) == "tref" {
+			// tref renders characters that live elsewhere; this subtree's
+			// own (empty) text says nothing about them.
+			plain = false
+			return
+		}
 		for _, c := range n.Children {
 			if !plain {
 				return
@@ -168,6 +174,12 @@ var disposableDefs = map[string]bool{
 // one is unreachable; anything questionable (unknown types, subtrees holding
 // a concretely referenced id) stays.
 func removeUnreferencedDefs(doc *dom.Node, refs *Refs) {
+	// Content rendered through <use> matches CSS in its original tree
+	// position, so structural selectors (+, :first-child) can depend on
+	// unreferenced siblings inside defs. A stylesheet freezes them all.
+	if refs.HasStylesheet {
+		return
+	}
 	doc.Walk(func(n *dom.Node) bool {
 		if n.Kind != dom.KindElement || localName(n.Name) != "defs" {
 			return true
@@ -387,15 +399,20 @@ func removeRedundantNamespaces(doc *dom.Node, refs *Refs) {
 	})
 	// CSS @namespace rules bind selector prefixes to URIs on the CSS side, so
 	// a stylesheet never depends on an unused XML prefix; only a script could
-	// (lookupNamespaceURI), so scripts keep declarations as they are.
-	hasScript := false
+	// (lookupNamespaceURI), so scripts keep declarations as they are. An
+	// internal DTD subset can define entities whose unexpanded text uses any
+	// prefix — usage this scan cannot see — so it keeps them all too.
+	hasScript, hasSubset := false, false
 	doc.Walk(func(n *dom.Node) bool {
 		if n.Kind == dom.KindElement && localName(n.Name) == "script" {
 			hasScript = true
 		}
-		return !hasScript
+		if n.Kind == dom.KindDoctype && bytes.ContainsRune(n.Raw(), '[') {
+			hasSubset = true
+		}
+		return !(hasScript && hasSubset)
 	})
-	dropUnused := !opaque && !hasScript
+	dropUnused := !opaque && !hasScript && !hasSubset
 	var walk func(n *dom.Node, scope map[string]string)
 	walk = func(n *dom.Node, scope map[string]string) {
 		next := scope
