@@ -244,3 +244,13 @@ func TestStrokeWidthNeverRounded(t *testing.T) {
 		}
 	}
 }
+
+func TestNonCanonicalPropertyCasingUntouched(t *testing.T) {
+	// CSS property names are case-insensitive on paper, but some renderers
+	// only recognize lowercase: normalizing the author's casing changes
+	// what they apply.
+	in := `<svg><circle fill="red" style="FiLl: oRaNgE" r="5"/></svg>`
+	if got := runPresentation(t, in, 3); !strings.Contains(got, "FiLl:oRaNgE") {
+		t.Errorf("non-canonical casing rewritten: %q", got)
+	}
+}

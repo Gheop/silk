@@ -238,6 +238,10 @@ func optimizeStyleAttr(n *dom.Node, refs *Refs, prec int) {
 			kept = append(kept, d) // !important: priority games, hands off
 			continue
 		}
+		if d.prop != strings.ToLower(d.prop) {
+			kept = append(kept, d) // non-canonical casing: renderer-dependent
+			continue
+		}
 		if colorProps[d.prop] {
 			d.val = shortestColor(d.val)
 		}
@@ -397,11 +401,15 @@ func parseDecls(s string) ([]decl, bool) {
 		if i <= 0 {
 			return nil, false
 		}
-		prop := strings.ToLower(strings.TrimSpace(part[:i]))
+		prop := strings.TrimSpace(part[:i])
 		val := strings.TrimSpace(part[i+1:])
 		if prop == "" || val == "" || strings.ContainsAny(prop, " \t(") {
 			return nil, false
 		}
+		// CSS property names are case-insensitive, but some renderers only
+		// recognize the lowercase spelling; normalizing the author's casing
+		// would change what those renderers apply. Keep it verbatim — the
+		// rewrite passes skip anything not already canonical.
 		out = append(out, decl{prop, val})
 	}
 	return out, true
