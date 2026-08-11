@@ -905,8 +905,11 @@ func (st *state) dropNoop(endX, endY float64, pts ...float64) bool {
 	if math.Abs(st.q(endX)-rx) > st.tol || math.Abs(st.q(endY)-ry) > st.tol {
 		return false
 	}
+	// Only the exact point advances: nothing was emitted, so the smooth-
+	// reflection state still describes the last command the consumer will
+	// actually see. Clearing it here made a later curve eligible for s/S
+	// against the wrong reflection base.
 	st.cx, st.cy = endX, endY
-	st.prevCubic, st.prevQuad = false, false
 	return true
 }
 
@@ -1169,7 +1172,16 @@ func (st *state) arcTo(rx, ry, rot, laf, sf, x, y float64) {
 	// bound. Only reproducing the exact input chord keeps the figure, so
 	// the endpoint is re-based on the emitted start and the chord is
 	// emitted verbatim (quantized beyond float noise).
-	if cvx, cvy := x-st.cx, y-st.cy; arcMargin(rx, ry, rot, cvx, cvy) <= 20*st.tol && st.tol > 0 {
+	// The other ill-conditioned pole is the nearly closed large arc: the
+	// centre sits ~r from the chord midpoint along its normal, so an error
+	// δ in a chord of length l rotates the whole figure by δ·r/l — at
+	// l ≪ r, hundreds of times the rounding tolerance. The re-based chord
+	// already carries the start point's residue, so no endpoint precision
+	// fixes it; only the exact chord vector does (the figure then merely
+	// translates by the residue instead of rotating).
+	nearlyClosed := laf != 0 && 3*math.Hypot(x-st.cx, y-st.cy) < min(math.Abs(rx), math.Abs(ry))
+	if cvx, cvy := x-st.cx, y-st.cy; st.tol > 0 &&
+		(arcMargin(rx, ry, rot, cvx, cvy) <= 20*st.tol || nearlyClosed) {
 		cvx, cvy = quantize(cvx, 12), quantize(cvy, 12)
 		st.choose(append(st.candBuf[:0], cand{op: 'a', prec: 12,
 			nargs: 7, args: [7]float64{rx, ry, rot, laf, sf, cvx, cvy},

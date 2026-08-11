@@ -304,3 +304,27 @@ func TestZeroHandleSurvivesRounding(t *testing.T) {
 		t.Errorf("mid-path zero handle lost: %s", out)
 	}
 }
+
+func TestNearlyClosedArcKeepsExactChord(t *testing.T) {
+	// A large-arc whose chord is tiny relative to the radii is a nearly
+	// closed ellipse: a chord error δ rotates the figure by δ·r/l. The
+	// re-based chord carries the start point's rounding residue, so the
+	// chord must be emitted exactly.
+	out := opt(t, "M10.0004 20.0007l50 0a9.8571424 13.714286 0 1 1 0.007 0.0203",
+		Options{Precision: 3})
+	if !strings.Contains(out, ".007 .0203") && !strings.Contains(out, ".007.0203") {
+		t.Errorf("nearly-closed arc chord not exact: %s", out)
+	}
+}
+
+func TestDroppedNoopKeepsReflectionBase(t *testing.T) {
+	// Dropping a zero-length lineto emits nothing, so a following curve's
+	// smooth-reflection base is still the previous cubic — not the current
+	// point. Encoding it as s would hand the consumer the wrong tangent.
+	out := opt(t, "M.659 58.017C.701 65.322 2.962 79.175 17.133 87.332L17.133 87.332"+
+		"C17.133 87.332 11.181 76.229 21.86 65.486",
+		Options{Precision: 3, RemoveNoops: true})
+	if strings.Contains(out, "s") {
+		t.Errorf("s emitted against a dropped-noop reflection base: %s", out)
+	}
+}
