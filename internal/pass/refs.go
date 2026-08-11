@@ -40,7 +40,10 @@ func (r *Refs) ConcretelyUsedID(id string) bool {
 }
 
 var urlRefPattern = regexp.MustCompile(`url\(\s*['"]?#([^'")]+)['"]?\s*\)`)
-var cssHashPattern = regexp.MustCompile(`#([A-Za-z_][\w.-]*)`)
+
+// CSS identifiers admit any non-ASCII character; \w would stop at the first
+// multibyte rune and record a truncated id that matches nothing.
+var cssHashPattern = regexp.MustCompile(`#([\pL_][\pL\pN_.-]*)`)
 
 // Analyze builds the reference graph for a document.
 func Analyze(doc *dom.Node) *Refs {

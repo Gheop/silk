@@ -59,3 +59,14 @@ func TestAnalyzeStylesheet(t *testing.T) {
 		t.Error("xml-stylesheet PI not detected")
 	}
 }
+
+func TestStylesheetNonASCIIIDReference(t *testing.T) {
+	// Turkish "Adsız degrade" (Illustrator's unnamed gradient) produces ids
+	// beyond ASCII; the stylesheet scan must capture them whole.
+	doc := parse(t, `<svg><style>.a { fill: url(#Adsız_degrade_17); }</style>`+
+		`<defs><linearGradient id="Adsız_degrade_17"/></defs><path class="a" d="M0 0"/></svg>`)
+	refs := Analyze(doc)
+	if !refs.ConcretelyUsedID("Adsız_degrade_17") {
+		t.Fatalf("non-ASCII id referenced from stylesheet not seen as used")
+	}
+}
