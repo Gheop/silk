@@ -234,6 +234,13 @@ func removeInert(doc *dom.Node, refs *Refs, editorPrefixes map[string]bool) {
 func removableInert(n *dom.Node, refs *Refs, editorPrefixes map[string]bool) bool {
 	switch n.Kind {
 	case dom.KindComment:
+		// Inside <style>, comment nodes change what some CSS engines see:
+		// resvg discards the whole sheet when they are present, so removing
+		// them would activate rules the input never applied.
+		if n.Parent != nil && n.Parent.Kind == dom.KindElement &&
+			localName(n.Parent.Name) == "style" {
+			return false
+		}
 		return true
 	case dom.KindDoctype:
 		// An internal subset can declare entities the document uses.
@@ -251,6 +258,9 @@ func removableInert(n *dom.Node, refs *Refs, editorPrefixes map[string]bool) boo
 	case dom.KindText:
 		return insignificantWhitespace(n)
 	case dom.KindElement:
+		if underSwitch(n) {
+			return false
+		}
 		if localName(n.Name) == "metadata" {
 			return !subtreeReferenced(n, refs)
 		}
@@ -538,6 +548,9 @@ func removeEmptyContainers(doc *dom.Node, refs *Refs) {
 
 func emptyContainer(n *dom.Node, refs *Refs) bool {
 	if n.Kind != dom.KindElement || !emptiableContainers[localName(n.Name)] || len(n.Children) > 0 {
+		return false
+	}
+	if underSwitch(n) {
 		return false
 	}
 	if id, ok := n.AttrValue("id"); ok && refs.UsedID(id) {

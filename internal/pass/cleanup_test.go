@@ -151,3 +151,26 @@ func TestCanonicalizeTagsAndXMLSpace(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanupKeepsSwitchChildren(t *testing.T) {
+	// An empty group under <switch> is a real alternative (it renders
+	// nothing when selected); removing it would promote the next child.
+	in := `<svg><switch><g systemLanguage="fr"></g><g><path d="M0 0"/></g></switch></svg>`
+	if got := runCleanup(t, in); got != in {
+		t.Errorf("empty switch child removed:\n got: %q\nwant: %q", got, in)
+	}
+	// Same for metadata as a direct switch child: its position is semantic.
+	in2 := `<svg><switch><metadata/><path d="M0 0"/></switch></svg>`
+	if got := runCleanup(t, in2); got != in2 {
+		t.Errorf("metadata switch child removed:\n got: %q\nwant: %q", got, in2)
+	}
+}
+
+func TestKeepsCommentsInsideStyle(t *testing.T) {
+	// resvg drops an entire stylesheet whose element contains XML comment
+	// nodes; removing them would activate rules the input never applied.
+	in := `<svg><style><!--x-->.a{fill:red}</style><path class="a" d="M0 0"/></svg>`
+	if got := runCleanup(t, in); got != in {
+		t.Errorf("style comment removed:\n got: %q\nwant: %q", got, in)
+	}
+}
