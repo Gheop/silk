@@ -75,3 +75,12 @@ func TestCollapseGroupsKeepsSwitchChildren(t *testing.T) {
 		t.Errorf("nested collapse under switch child:\n got: %q\nwant: %q", got, want2)
 	}
 }
+
+func TestCollapseKeepsTransformOffOriginCarriers(t *testing.T) {
+	// transform-origin is inert on an element with no transform of its own;
+	// pushing the group's transform down would activate it.
+	in := `<svg><g transform="scale(2)"><rect transform-origin="bottom right" width="20" height="20"/></g></svg>`
+	if got := runGroups(t, in); got != in {
+		t.Errorf("transform pushed onto transform-origin carrier:\n got: %q", got)
+	}
+}

@@ -78,6 +78,12 @@ func collapseGroup(g *dom.Node, refs *Refs) bool {
 		}
 		switch {
 		case a.Name == "transform":
+			// transform-origin/box apply to the element's own transform: on
+			// a child without one they are inert, and pushing the group's
+			// transform down would activate them.
+			if child.HasAttr("transform-origin") || child.HasAttr("transform-box") {
+				return false
+			}
 			if cv, cok := child.AttrValue("transform"); child.HasAttr("transform") {
 				if !cok {
 					return false
