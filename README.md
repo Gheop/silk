@@ -305,8 +305,15 @@ optimizations are acceptable, and it is cheaper to discuss the gate first.
 Before you send a pull request, run `gofmt`, `go vet ./...`, and
 `go test ./...` — CI enforces all three.
 
-TODO: document how to obtain or rebuild a benchmark corpus for
-contributors (the reference corpus is not public).
+The reference corpus is not public, but any directory of real-world SVG
+files works. [Wikimedia Commons](https://commons.wikimedia.org/wiki/Category:SVG_files)
+hosts millions of freely licensed SVGs across every authoring tool and
+style; download a mixed sample (maps, line art, diagrams, icons) and point
+the suite at it:
+
+```
+SILK_CORPUS=/path/to/your/svgs go test ./...
+```
 
 ## License
 
