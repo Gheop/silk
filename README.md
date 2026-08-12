@@ -61,8 +61,8 @@ The image is published to two registries. Each release tag `vX.Y.Z`
 publishes `X.Y.Z` and updates `latest`:
 
 ```
-docker pull ghcr.io/gheop/silk:0.4.0
-docker pull registry.gitlab.com/gheop/silk:0.4.0
+docker pull ghcr.io/gheop/silk:0.6.0
+docker pull registry.gitlab.com/gheop/silk:0.6.0
 ```
 
 The image is built from `scratch` and contains only the static binary.
@@ -105,7 +105,7 @@ The container reads stdin and writes stdout. Pass CLI flags after the
 image name:
 
 ```
-docker run -i ghcr.io/gheop/silk:0.4.0 -precision 2 < input.svg > output.svg
+docker run -i ghcr.io/gheop/silk:0.6.0 -precision 2 < input.svg > output.svg
 ```
 
 ## Configuration
@@ -211,14 +211,14 @@ percent of input after optimization, lower is better.
 | SFI.svg | 2.3 MiB | 56.4 % | **52.9 %** |
 | Coloriage-TDF-Citadelle.svg | 514 KiB | **32.9 %** | 47.3 % |
 | Ruler_illustration.svg | 52 KiB | **37.2 %** | 37.7 % |
-| CrystalTreeofLife_SVG.svg | 592 KiB | 11.8 % | **11.0 %** |
-| Jade_dragon.svg | 211 KiB | **33.2 %** | 33.6 % |
+| CrystalTreeofLife_SVG.svg | 592 KiB | 11.9 % | **11.0 %** |
+| Jade_dragon.svg | 211 KiB | 40.4 % | **33.6 %** |
 | Feedback_Punkteabfrage.svg | 611 KiB | 27.8 % | **27.1 %** |
 | Lo-Fi_House_Vinyl_Cover.svg | 2.1 MiB | 34.2 % | 34.2 % |
-| Le_Fritkot_BW.svg | 304 KiB | 64.7 % | **53.6 %** |
+| Le_Fritkot_BW.svg | 304 KiB | 65.2 % | **53.6 %** |
 | Fuehrung.svg | 333 KiB | **55.0 %** | fails to parse |
-| **Whole corpus (100 files)** | 42.3 MiB | **64.4 %** | 65.6 % |
-| **Median ratio** | | 58.6 % | **57.0 %** |
+| **Whole corpus (100 files)** | 42.3 MiB | **64.6 %** | 65.6 % |
+| **Median ratio** | | 60.0 % | **57.0 %** |
 
 Fidelity, measured with the bundled resvg pixel harness on the same corpus:
 silk passes all 100 files. svgo fails 9 of them — one does not parse (DTD
@@ -322,6 +322,40 @@ SILK_CORPUS=/path/to/your/svgs go test ./...
 MIT — see [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.6.0 — UTF-16 input, differential render fuzzing, scale-aware precision (2026-08-12)
+
+- New: UTF-16 documents (CorelDRAW exports, some Windows tools) transcode
+  to UTF-8 on parse, with the prolog's encoding declaration rewritten to
+  match. Several renderers refuse UTF-16 outright, so these files become
+  both smaller (the transcoding alone halves them) and more portable.
+- New: coordinate precision now follows the document's scale — a root
+  viewBox spanning a few units (drawings exported in physical units) and
+  subtrees under large cumulative transforms both get the extra decimals
+  their amplification calls for.
+- The corpus grew again, to 17,001 files (16 Wikimedia categories across
+  8 authoring toolchains, plus the W3C and resvg suites), and a
+  differential render fuzzer now generates adversarial documents and
+  pixel-compares them after optimization. Eight fixes came out of it:
+- Fixed: a family of rounding-residual corruptions — the consumer derives
+  curve tangents, join angles, auto-oriented marker rotations and dash
+  phase from vertices as emitted, and a vertex's rounding residual could
+  dominate any of those when the direction-carrying vector was tiny.
+  Every endpoint (buffered movetos included) now rounds finely enough for
+  the residual to vanish against the next command's first vector.
+- Fixed: paths carrying markers keep exact coordinates (no finite
+  precision bounds an auto-oriented marker's rotation), and dashed paths
+  keep two extra decimals (phase error accumulates along the stroke).
+- Fixed: a negative stroke-dasharray value — even `-0` — invalidates the
+  list and the stroke renders solid; normalizing the sign away would have
+  turned the dashes on.
+- Fixed: zero-length segments and degenerate control handles survive
+  rounding intact on strokable paths; the elevated-quadratic demotion is
+  restricted to provably unstroked geometry (renderers tessellate
+  quadratics and cubics differently at large sizes).
+- Benchmark on the 100-file corpus: 64.6 % of input in total (svgo:
+  65.6 %), per-file median 60.0 % (svgo: 57.0 %) — about a point of
+  median paid for the marker, dash and transform-scale guarantees.
 
 ### v0.5.0 — Sixteen rendering fixes from a 7,648-file stress campaign (2026-08-12)
 
