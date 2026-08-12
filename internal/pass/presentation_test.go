@@ -254,3 +254,13 @@ func TestNonCanonicalPropertyCasingUntouched(t *testing.T) {
 		t.Errorf("non-canonical casing rewritten: %q", got)
 	}
 }
+
+func TestNegativeDasharrayUntouched(t *testing.T) {
+	// A negative value (even -0) invalidates the whole dasharray and the
+	// stroke renders solid; normalizing the sign away would validate the
+	// list and turn the dashes on.
+	in := `<svg><path stroke="red" stroke-dasharray="0.5842828517655089 -0" d="M0 0h9"/></svg>`
+	if got := runPresentation(t, in, 3); !strings.Contains(got, `stroke-dasharray="0.5842828517655089 -0"`) {
+		t.Errorf("negative dasharray rewritten: %q", got)
+	}
+}

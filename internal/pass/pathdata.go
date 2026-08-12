@@ -170,14 +170,19 @@ func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear b
 		// through feTurbulence on the corpus.
 		return prec, false, false
 	}
-	if !markerSafeElement(n) || !dashSafeElement(n) {
+	if !markerSafeElement(n) {
 		// An orient="auto" marker takes its rotation from vertex tangents,
 		// whose length can be smaller than the rounding residual of the
-		// shared vertex: no finite precision bounds the rotation. And a
-		// dash pattern integrates the whole path length, so any geometry
-		// error accumulates without bound along the stroke. Both keep
-		// exact coordinates.
+		// shared vertex: no finite precision bounds the rotation, so paths
+		// that concretely carry markers keep exact coordinates.
 		return -1, false, false
+	}
+	if !dashSafeElement(n) && prec >= 0 {
+		// A dash pattern integrates the whole path length: per-segment
+		// length errors accumulate along the stroke by the segment count.
+		// Two extra decimals keep the accumulated phase error below a
+		// fraction of a period on paths thousands of segments long.
+		return min(prec+2, 8), false, false
 	}
 	return prec, docSafe && noopSafeElement(n), docSafe && markerSafeElement(n)
 }

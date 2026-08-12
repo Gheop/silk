@@ -852,6 +852,20 @@ func (et endpoint) withMin(lp int) int {
 // forced to the precision at which rounding error stays below ~0.5% of the
 // closing vector — exact emission would spend tens of bytes per number on
 // the same direction guarantee.
+// lookaheadPrec is the endpoint precision the next command's first vector
+// demands. It only engages for genuinely tiny vectors: beyond ~0.05 units
+// the residual's direction error is under a degree, which no join, marker
+// or dash renders at the tolerances the gate measures.
+func (st *state) lookaheadPrec() int {
+	if !st.nextVOK || st.o.RemoveNoops {
+		return -1
+	}
+	if m := max(math.Abs(st.nextVX), math.Abs(st.nextVY)); m == 0 || m >= 0.05 {
+		return -1
+	}
+	return localPrec(st.prec, st.nextVX, st.nextVY)
+}
+
 func (st *state) endpointFor(x, y float64) endpoint {
 	// A segment whose exact endpoint is the exact current point is a stall:
 	// re-basing it onto the exact target would give it the length of the
@@ -864,10 +878,7 @@ func (st *state) endpointFor(x, y float64) endpoint {
 	// The next command's first direction is computed from this endpoint as
 	// emitted: keep the rounding residual small against that vector, or a
 	// tiny tangent (huge stroke joins, auto-oriented markers) rotates.
-	nextMin := -1
-	if st.nextVOK && !st.o.RemoveNoops {
-		nextMin = localPrec(st.prec, st.nextVX, st.nextVY)
-	}
+	nextMin := st.lookaheadPrec()
 	// The closing vector only shows through the stroke's join; a fill
 	// closes to the start point wherever the endpoint rounds to.
 	if !st.nextClose || st.pending || st.o.RemoveNoops {
@@ -910,10 +921,7 @@ func (st *state) command(c Cmd) {
 		st.pending, st.px, st.py = true, x, y
 		// The command after this moveto derives its first direction from
 		// the moveto's emitted point: same lookahead as endpointFor.
-		st.pendingMin = -1
-		if st.nextVOK && !st.o.RemoveNoops {
-			st.pendingMin = localPrec(st.prec, st.nextVX, st.nextVY)
-		}
+		st.pendingMin = st.lookaheadPrec()
 		st.cx, st.cy, st.sx, st.sy = x, y, x, y
 		st.prevCubic, st.prevQuad = false, false
 		st.open = false

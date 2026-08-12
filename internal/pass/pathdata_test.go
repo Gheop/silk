@@ -33,11 +33,12 @@ func TestMarkerPathsKeepExactCoordinates(t *testing.T) {
 
 func TestDashedPathsKeepExactCoordinates(t *testing.T) {
 	// Dash phase integrates the whole path length: geometry error
-	// accumulates without bound along a dashed stroke.
+	// accumulates along a dashed stroke, so dashed paths get two extra
+	// decimals of precision.
 	doc := parse(t, `<svg><path stroke="red" stroke-dasharray="3.55 7.167" d="M0 0L4.160073040064538 8.320"/></svg>`)
 	OptimizePaths(doc, 3, NewPathCache())
 	out := string(dom.Serialize(doc))
-	if !strings.Contains(out, "4.160073040064538") {
-		t.Errorf("dashed path rounded: %q", out)
+	if !strings.Contains(out, "4.16007 8.32") {
+		t.Errorf("dashed path not at raised precision: %q", out)
 	}
 }

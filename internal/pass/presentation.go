@@ -134,6 +134,12 @@ func OptimizePresentation(doc *dom.Node, refs *Refs, prec int) {
 			roundAttr(n, name, prec)
 		}
 		for _, name := range exactNumericProps {
+			if name == "stroke-dasharray" && dasharrayHasNegative(n) {
+				// A negative value (even -0) makes the whole list invalid
+				// and the stroke renders solid; normalizing the sign away
+				// would validate the list and turn the dashes on.
+				continue
+			}
 			roundAttr(n, name, -1)
 		}
 		optimizeColorAttrs(n, refs)
@@ -250,7 +256,11 @@ func optimizeStyleAttr(n *dom.Node, refs *Refs, prec int) {
 			if d.prop == "stroke-dasharray" || d.prop == "stroke-width" {
 				p = -1
 			}
-			if s, ok := minifyNumbers(d.val, p); ok && len(s) <= len(d.val) {
+			// A negative dasharray value (even -0) invalidates the list and
+			// the stroke renders solid; rewriting the sign away would turn
+			// the dashes on.
+			negDash := d.prop == "stroke-dasharray" && strings.Contains(" "+d.val, " -")
+			if s, ok := minifyNumbers(d.val, p); ok && !negDash && len(s) <= len(d.val) {
 				d.val = s
 			}
 		}
@@ -501,4 +511,22 @@ func parseColor(s string) (uint32, bool) {
 		return rgb, true
 	}
 	return 0, false
+}
+
+// dasharrayHasNegative reports whether the element's stroke-dasharray holds
+// a negatively signed value — -0 included, which strconv parses to a value
+// equal to zero but whose spelling carries the sign some parsers reject.
+func dasharrayHasNegative(n *dom.Node) bool {
+	v, ok := n.AttrValue("stroke-dasharray")
+	if !ok {
+		return false
+	}
+	for _, f := range strings.FieldsFunc(v, func(r rune) bool {
+		return r == ' ' || r == ',' || r == '\t' || r == '\n' || r == '\r'
+	}) {
+		if strings.HasPrefix(f, "-") {
+			return true
+		}
+	}
+	return false
 }
