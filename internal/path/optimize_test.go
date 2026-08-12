@@ -362,3 +362,27 @@ func TestNoFlattenOfDegenerateHandlesWhenStrokable(t *testing.T) {
 		t.Errorf("flatten expected on unstroked path: %s", out2)
 	}
 }
+
+func TestEndpointPrecisionFollowsNextTangent(t *testing.T) {
+	// The next command's start tangent is derived from this endpoint as
+	// emitted; a residual comparable to a tiny tangent rotates it (huge
+	// stroke joins, auto-oriented markers). The shared vertex must round
+	// finely enough for the residual to vanish against the tangent.
+	out := opt(t, "M0 0L426.446 1584 3664.54 2140.0243C3664.5410720661184 2140.02427 4203 1988 1.8011 -214.61756",
+		Options{Precision: 3})
+	if !strings.Contains(out, "556.0243") || !strings.Contains(out, ".00107") {
+		t.Errorf("shared vertex rounded coarser than the next tangent: %s", out)
+	}
+}
+
+func TestDoublyDegenerateCubicKeepsOutgoingTangent(t *testing.T) {
+	// c1 and c2 both on the start anchor: the outgoing tangent falls to
+	// the endpoint delta. Preserving c2's absolute position while the
+	// anchor rounds would leave it behind the new anchor and flip the
+	// tangent a stroked miter renders.
+	out := opt(t, "M0 0S0.025 60 49.90692559271088 40.16"+
+		"C49.90692559271088 40.16 49.90692559271088 40.16 49.907 40.16047", Options{Precision: 3})
+	if strings.Contains(out, "e-") {
+		t.Errorf("residual leaked into a degenerate handle: %s", out)
+	}
+}

@@ -66,17 +66,87 @@ func run(cs []Cmd, o Options, collect bool) ([]byte, []Cmd) {
 		st.emitted = make([]Cmd, 0, len(cs))
 		st.arenaBlock = min(4096, len(cs)*3+8)
 	}
+	inVecs := incomingVecs(cs)
 	for i, c := range cs {
 		// Removing or re-basing the command before a smooth curve would
 		// change that curve's reflected control point.
 		st.nextRefl = i+1 < len(cs) && isSmooth(cs[i+1].Op)
 		st.nextClose = i+1 < len(cs) && (cs[i+1].Op|0x20) == 'z'
+		st.nextVX, st.nextVY, st.nextVOK = 0, 0, false
+		if i+1 < len(cs) {
+			st.nextVX, st.nextVY, st.nextVOK = inVecs[i+1].x, inVecs[i+1].y, inVecs[i+1].ok
+		}
 		st.command(c)
 	}
 	if st.pending && !o.RemoveNoops {
 		st.flushPending()
 	}
 	return st.e.b, st.emitted
+}
+
+type inVec struct {
+	x, y float64
+	ok   bool
+}
+
+// incomingVecs computes, for every command, the exact vector from its start
+// point to its first geometric point (first control, or the endpoint for
+// lines and arcs). The consumer derives that direction — a curve tangent, a
+// join, an auto-oriented marker — from the EMITTED shared vertex, so it is
+// corrupted by that vertex's rounding residual: the vertex must be emitted
+// precisely enough for the residual to stay small against this vector.
+func incomingVecs(cs []Cmd) []inVec {
+	out := make([]inVec, len(cs))
+	x, y, sx, sy := 0.0, 0.0, 0.0, 0.0
+	for i, c := range cs {
+		rel := c.Op >= 'a'
+		ox, oy := 0.0, 0.0
+		if rel {
+			ox, oy = x, y
+		}
+		switch c.Op | 0x20 {
+		case 'm':
+			x, y = ox+c.Args[0], oy+c.Args[1]
+			sx, sy = x, y
+		case 'z':
+			x, y = sx, sy
+		case 'l':
+			out[i] = inVec{ox + c.Args[0] - x, oy + c.Args[1] - y, true}
+			x, y = ox+c.Args[0], oy+c.Args[1]
+		case 'h':
+			nx := c.Args[0]
+			if rel {
+				nx += x
+			}
+			out[i] = inVec{nx - x, 0, true}
+			x = nx
+		case 'v':
+			ny := c.Args[0]
+			if rel {
+				ny += y
+			}
+			out[i] = inVec{0, ny - y, true}
+			y = ny
+		case 'c':
+			out[i] = inVec{ox + c.Args[0] - x, oy + c.Args[1] - y, true}
+			x, y = ox+c.Args[4], oy+c.Args[5]
+		case 's':
+			// The first control is a reflection; the second edge is the
+			// first vertex-anchored vector the consumer computes.
+			out[i] = inVec{ox + c.Args[0] - x, oy + c.Args[1] - y, true}
+			x, y = ox+c.Args[2], oy+c.Args[3]
+		case 'q':
+			out[i] = inVec{ox + c.Args[0] - x, oy + c.Args[1] - y, true}
+			x, y = ox+c.Args[2], oy+c.Args[3]
+		case 't':
+			out[i] = inVec{ox + c.Args[0] - x, oy + c.Args[1] - y, true}
+			x, y = ox+c.Args[0], oy+c.Args[1]
+		case 'a':
+			out[i] = inVec{ox + c.Args[5] - x, oy + c.Args[6] - y, true}
+			x, y = ox+c.Args[5], oy+c.Args[6]
+		}
+	}
+	return out
 }
 
 func isSmooth(op byte) bool {
@@ -126,11 +196,15 @@ type state struct {
 
 	prevCubic, prevQuad bool
 
-	pending   bool // moveto buffered until its subpath proves non-empty
-	px, py    float64
-	open      bool // something was drawn since the last moveto/closepath
-	nextRefl  bool
-	nextClose bool
+	nextVX, nextVY float64 // exact incoming vector of the next command
+	nextVOK        bool
+
+	pending    bool // moveto buffered until its subpath proves non-empty
+	px, py     float64
+	pendingMin int  // endpoint precision the buffered moveto must honor
+	open       bool // something was drawn since the last moveto/closepath
+	nextRefl   bool
+	nextClose  bool
 
 	collect    bool // record the emitted command list
 	emitted    []Cmd
@@ -787,10 +861,17 @@ func (st *state) endpointFor(x, y float64) endpoint {
 	if x == st.cx && y == st.cy && !st.o.RemoveNoops {
 		return endpoint{x: st.ecx, y: st.ecy}
 	}
+	// The next command's first direction is computed from this endpoint as
+	// emitted: keep the rounding residual small against that vector, or a
+	// tiny tangent (huge stroke joins, auto-oriented markers) rotates.
+	nextMin := -1
+	if st.nextVOK && !st.o.RemoveNoops {
+		nextMin = localPrec(st.prec, st.nextVX, st.nextVY)
+	}
 	// The closing vector only shows through the stroke's join; a fill
 	// closes to the start point wherever the endpoint rounds to.
 	if !st.nextClose || st.pending || st.o.RemoveNoops {
-		return endpoint{x: x, y: y}
+		return endpoint{x: x, y: y, minPrec: nextMin}
 	}
 	gx, gy := st.sx-x, st.sy-y
 	if gx == 0 && gy == 0 {
@@ -799,9 +880,9 @@ func (st *state) endpointFor(x, y float64) endpoint {
 		return endpoint{x: st.esx, y: st.esy, minPrec: 12}
 	}
 	if math.Abs(gx) <= 20*st.tol && math.Abs(gy) <= 20*st.tol {
-		return endpoint{x: st.esx - gx, y: st.esy - gy, minPrec: localPrec(st.prec, gx, gy)}
+		return endpoint{x: st.esx - gx, y: st.esy - gy, minPrec: max(nextMin, localPrec(st.prec, gx, gy))}
 	}
-	return endpoint{x: x, y: y}
+	return endpoint{x: x, y: y, minPrec: nextMin}
 }
 
 func (st *state) command(c Cmd) {
@@ -827,6 +908,12 @@ func (st *state) command(c Cmd) {
 		// With removal enabled, a still-buffered moveto is an empty subpath:
 		// the new one simply replaces it.
 		st.pending, st.px, st.py = true, x, y
+		// The command after this moveto derives its first direction from
+		// the moveto's emitted point: same lookahead as endpointFor.
+		st.pendingMin = -1
+		if st.nextVOK && !st.o.RemoveNoops {
+			st.pendingMin = localPrec(st.prec, st.nextVX, st.nextVY)
+		}
 		st.cx, st.cy, st.sx, st.sy = x, y, x, y
 		st.prevCubic, st.prevQuad = false, false
 		st.open = false
@@ -1009,6 +1096,12 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	if c2x == x && c2y == y {
 		c2relX, c2relY = et.x-st.ecx, et.y-st.ecy
 		c2absX, c2absY = et.x, et.y
+	} else if c2x == st.cx && c2y == st.cy {
+		// A second control on the START anchor carries the outgoing tangent
+		// of a doubly degenerate curve; keeping its absolute position while
+		// the anchor rounds would leave it BEHIND the new anchor and flip
+		// that tangent (a stroked miter renders the flip).
+		c2relX, c2relY, c2absX, c2absY = 0, 0, st.ecx, st.ecy
 	}
 	lp := et.withMin(st.dirPrec(
 		c1relX, c1relY, // start tangent (zero when pinned: no direction)
@@ -1252,10 +1345,15 @@ func (st *state) flushPending() {
 	}
 	st.pending = false
 	x, y := st.px, st.py
+	lp := st.prec
+	if st.prec >= 0 && st.pendingMin > lp {
+		lp = min(st.pendingMin, 12)
+	}
+	ql := func(v float64) float64 { return quantize(v, lp) }
 	win := st.choose([]cand{
-		{op: 'M', prec: st.prec, nargs: 2, args: [7]float64{x, y}, endX: st.q(x), endY: st.q(y)},
-		{op: 'm', prec: st.prec, nargs: 2, args: [7]float64{x - st.ecx, y - st.ecy},
-			endX: st.ecx + st.q(x-st.ecx), endY: st.ecy + st.q(y-st.ecy)},
+		{op: 'M', prec: lp, nargs: 2, args: [7]float64{x, y}, endX: ql(x), endY: ql(y)},
+		{op: 'm', prec: lp, nargs: 2, args: [7]float64{x - st.ecx, y - st.ecy},
+			endX: st.ecx + ql(x-st.ecx), endY: st.ecy + ql(y-st.ecy)},
 	})
 	st.esx, st.esy = win.endX, win.endY
 }

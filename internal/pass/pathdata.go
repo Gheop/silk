@@ -170,7 +170,38 @@ func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear b
 		// through feTurbulence on the corpus.
 		return prec, false, false
 	}
+	if !markerSafeElement(n) || !dashSafeElement(n) {
+		// An orient="auto" marker takes its rotation from vertex tangents,
+		// whose length can be smaller than the rounding residual of the
+		// shared vertex: no finite precision bounds the rotation. And a
+		// dash pattern integrates the whole path length, so any geometry
+		// error accumulates without bound along the stroke. Both keep
+		// exact coordinates.
+		return -1, false, false
+	}
 	return prec, docSafe && noopSafeElement(n), docSafe && markerSafeElement(n)
+}
+
+// dashSafeElement reports whether the element provably carries no dash
+// pattern, looking at its own and its ancestors' attributes and inline
+// styles (stroke-dasharray inherits).
+func dashSafeElement(n *dom.Node) bool {
+	for e := n; e != nil && e.Kind == dom.KindElement; e = e.Parent {
+		for i := range e.Attrs {
+			a := &e.Attrs[i]
+			switch a.Name {
+			case "stroke-dasharray":
+				if v, ok := a.Value(); !ok || strings.TrimSpace(strings.ToLower(v)) != "none" {
+					return false
+				}
+			case "style":
+				if v, ok := a.Value(); !ok || strings.Contains(v, "dasharray") {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 // markerSafeElement reports whether the element provably carries no markers:
