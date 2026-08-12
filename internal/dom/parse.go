@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/tdewolff/parse/v2"
 	"github.com/tdewolff/parse/v2/xml"
@@ -17,6 +20,18 @@ const maxDepth = 10000
 // (mismatched or unclosed tags, no root element) so the caller can fall back
 // to the untouched input.
 func Parse(svg []byte) (*Node, error) {
+	// UTF-16 documents (CorelDRAW exports, some Windows tools) transcode to
+	// UTF-8 up front; the whole tree, raw slices included, then lives in
+	// UTF-8 and serializes as such. The prolog's encoding declaration is
+	// rewritten to match, so the output document stays self-consistent.
+	if u8 := decodeUTF16(svg); u8 != nil {
+		doc, err := Parse(u8)
+		if err != nil {
+			return nil, err
+		}
+		fixEncodingDecl(doc)
+		return doc, nil
+	}
 	// The lexer normalizes whitespace inside attribute values in place and
 	// may write one byte past the slice; give it a private copy and keep the
 	// caller's bytes for verbatim raw slices.
@@ -124,5 +139,58 @@ func Parse(svg []byte) (*Node, error) {
 			cur.Children = append(cur.Children, &Node{Kind: KindDoctype, raw: raw, Parent: cur})
 			entities = parseInternalSubset(raw)
 		}
+	}
+}
+
+// decodeUTF16 returns the UTF-8 transcoding of a UTF-16 document, or nil
+// when the input is not UTF-16. Detection: byte-order mark, or a null byte
+// interleaved with the leading '<' (XML must start with '<' or whitespace,
+// so an early NUL only occurs as the high byte of a UTF-16 code unit).
+func decodeUTF16(b []byte) []byte {
+	if len(b) < 4 || len(b)%2 != 0 {
+		return nil
+	}
+	le := false
+	switch {
+	case b[0] == 0xFF && b[1] == 0xFE:
+		le = true
+		b = b[2:]
+	case b[0] == 0xFE && b[1] == 0xFF:
+		b = b[2:]
+	case b[0] == '<' && b[1] == 0x00:
+		le = true
+	case b[0] == 0x00 && b[1] == '<':
+	default:
+		return nil
+	}
+	units := make([]uint16, len(b)/2)
+	for i := range units {
+		if le {
+			units[i] = uint16(b[2*i]) | uint16(b[2*i+1])<<8
+		} else {
+			units[i] = uint16(b[2*i])<<8 | uint16(b[2*i+1])
+		}
+	}
+	out := make([]byte, 0, len(b))
+	for _, r := range utf16.Decode(units) {
+		out = utf8.AppendRune(out, r)
+	}
+	return out
+}
+
+var encodingDeclPattern = regexp.MustCompile(`(?i)encoding\s*=\s*(['"])[^'"]*(['"])`)
+
+// fixEncodingDecl rewrites a non-UTF-8 encoding declaration in the xml
+// prolog to utf-8, matching the transcoded bytes.
+func fixEncodingDecl(doc *Node) {
+	for _, c := range doc.Children {
+		if c.Kind != KindProcInst || c.Name != "xml" {
+			continue
+		}
+		raw := string(c.Raw())
+		if out := encodingDeclPattern.ReplaceAllString(raw, "encoding=${1}UTF-8${2}"); out != raw {
+			c.SetText(out)
+		}
+		return
 	}
 }

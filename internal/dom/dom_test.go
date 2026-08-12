@@ -2,6 +2,7 @@ package dom
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -173,6 +174,32 @@ func TestWalk(t *testing.T) {
 	for i := range want {
 		if names[i] != want[i] {
 			t.Fatalf("walk order = %v, want %v", names, want)
+		}
+	}
+}
+
+func TestParseUTF16(t *testing.T) {
+	src := `<?xml version="1.0" encoding="UTF-16"?><svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h20" fill="red"/></svg>`
+	for name, enc := range map[string]func(rune) []byte{
+		"LE": func(r rune) []byte { return []byte{byte(r), byte(r >> 8)} },
+		"BE": func(r rune) []byte { return []byte{byte(r >> 8), byte(r)} },
+	} {
+		var b []byte
+		if name == "LE" {
+			b = append(b, 0xFF, 0xFE)
+		} else {
+			b = append(b, 0xFE, 0xFF)
+		}
+		for _, r := range src {
+			b = append(b, enc(r)...)
+		}
+		doc, err := Parse(b)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		out := string(Serialize(doc))
+		if !strings.Contains(out, `encoding="UTF-8"`) || !strings.Contains(out, `d="M0 0h20"`) {
+			t.Errorf("%s: bad transcode: %s", name, out)
 		}
 	}
 }
