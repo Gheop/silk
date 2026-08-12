@@ -779,6 +779,14 @@ func (et endpoint) withMin(lp int) int {
 // closing vector — exact emission would spend tens of bytes per number on
 // the same direction guarantee.
 func (st *state) endpointFor(x, y float64) endpoint {
+	// A segment whose exact endpoint is the exact current point is a stall:
+	// re-basing it onto the exact target would give it the length of the
+	// rounding residue and a direction stroked joins render. Pin it to the
+	// emitted point; the residue does not accumulate (it stays the current
+	// point's own).
+	if x == st.cx && y == st.cy && !st.o.RemoveNoops {
+		return endpoint{x: st.ecx, y: st.ecy}
+	}
 	// The closing vector only shows through the stroke's join; a fill
 	// closes to the start point wherever the endpoint rounds to.
 	if !st.nextClose || st.pending || st.o.RemoveNoops {
@@ -974,8 +982,13 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	}
 	// A curve whose control points sit inside the tolerance tube of its
 	// chord is the segment, to within the same error budget as rounding —
-	// unless a smooth follower needs the control point that would vanish.
-	if !st.nextRefl &&
+	// unless a smooth follower needs the control point that would vanish,
+	// or an endpoint handle is degenerate on a possibly stroked path: a
+	// control on its anchor makes the endpoint tangent vanish, which
+	// renderers join differently than the line's sharp angle (a miter at
+	// full stroke width where the input drew none).
+	degenerateHandle := (c1x == st.cx && c1y == st.cy) || (c2x == x && c2y == y)
+	if !st.nextRefl && (st.o.RemoveNoops || !degenerateHandle) &&
 		withinChordTube(c1x, c1y, st.cx, st.cy, x, y, st.tol) &&
 		withinChordTube(c2x, c2y, st.cx, st.cy, x, y, st.tol) {
 		st.lineTo(x, y)
@@ -1038,7 +1051,13 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	// hugging the chord (under 0.5% of it) keeps the original form.
 	var cqx, cqy float64
 	isQuad := false
-	if !st.nextRefl {
+	// The demotion is restricted to provably unstroked geometry, like arc
+	// conversion: renderers tessellate quadratics and cubics differently,
+	// and on a large thin-stroked curve that difference is a visible
+	// sub-pixel ripple a fill would hide. The gate also rules out the
+	// degenerate-handle stalls whose zero chord passes the bulge test
+	// trivially.
+	if !st.nextRefl && st.o.RemoveNoops {
 		q1x, q1y := (3*c1x-st.cx)/2, (3*c1y-st.cy)/2
 		q2x, q2y := (3*c2x-x)/2, (3*c2y-y)/2
 		dx, dy := q1x-q2x, q1y-q2y
@@ -1100,7 +1119,11 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 	if st.dropNoop(x, y, qx, qy) {
 		return
 	}
-	if !st.nextRefl && withinChordTube(qx, qy, st.cx, st.cy, x, y, st.tol) {
+	// Same degenerate-handle rule as cubicTo: a control on either anchor
+	// zeroes that endpoint tangent, which a stroked join renders.
+	qDegenerate := (qx == st.cx && qy == st.cy) || (qx == x && qy == y)
+	if !st.nextRefl && (st.o.RemoveNoops || !qDegenerate) &&
+		withinChordTube(qx, qy, st.cx, st.cy, x, y, st.tol) {
 		st.lineTo(x, y)
 		return
 	}

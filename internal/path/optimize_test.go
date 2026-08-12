@@ -42,10 +42,17 @@ func TestOptimizeEncodingChoices(t *testing.T) {
 		},
 		// A cubic that is exactly an elevated quadratic demotes, and its
 		// mirrored successor rides the smooth shorthand.
+		// Elevated quadratics demote only on provably unstroked geometry
+		// (renderers tessellate quads and cubics differently).
+		{
+			"M0 0C10 10 20 10 30 0C40 -10 50 -10 60 0",
+			Options{Precision: -1, RemoveNoops: true},
+			"M0 0q15 15 30 0t30 0",
+		},
 		{
 			"M0 0C10 10 20 10 30 0C40 -10 50 -10 60 0",
 			exact,
-			"M0 0q15 15 30 0t30 0",
+			"M0 0c10 10 20 10 30 0s20-10 30 0",
 		},
 		// Smooth quadratic.
 		{"M0 0Q5 5 10 0Q15 -5 20 0", exact, "M0 0q5 5 10 0t10 0"},
@@ -337,5 +344,21 @@ func TestNoSmoothShorthandAcrossMoveto(t *testing.T) {
 		Options{Precision: 3})
 	if strings.Contains(out, "t") {
 		t.Errorf("t emitted across a moveto: %s", out)
+	}
+}
+
+func TestNoFlattenOfDegenerateHandlesWhenStrokable(t *testing.T) {
+	// A control on its anchor zeroes the endpoint tangent; flattening to a
+	// line gives the joint a sharp angle that a stroked miter renders as a
+	// spike the input never drew.
+	d := "M0 0c1 2 3 4 5.4321 6.4321c.2 .4 .2 .4 .2 .4c0 0 .3-.5 .9-1.2"
+	out := opt(t, d, Options{Precision: 3})
+	if strings.Contains(out, "l") || strings.Contains(out, "h") || strings.Contains(out, "v") {
+		t.Errorf("degenerate-handle curve flattened on strokable path: %s", out)
+	}
+	// Provably unstroked (RemoveNoops precondition): flattening is fine.
+	out2 := opt(t, d, Options{Precision: 3, RemoveNoops: true})
+	if !strings.ContainsAny(out2, "lhv") {
+		t.Errorf("flatten expected on unstroked path: %s", out2)
 	}
 }
