@@ -5,6 +5,9 @@ package silk
 
 import (
 	"bytes"
+	"math"
+	"strconv"
+	"strings"
 
 	"github.com/Gheop/silk/internal/dom"
 	"github.com/Gheop/silk/internal/pass"
@@ -87,24 +90,79 @@ func optimizeOnce(svg []byte, opts Options, cache *pass.PathCache) ([]byte, erro
 		return nil, err
 	}
 	refs := pass.Analyze(doc)
+	prec := pathPrecision(opts, doc)
 	pass.Cleanup(doc, refs)
-	pass.OptimizePresentation(doc, refs, pathPrecision(opts))
+	pass.OptimizePresentation(doc, refs, prec)
 	pass.CollapseGroups(doc, refs)
 	pass.ConvertTransforms(doc, transformPrecision(opts))
 	pass.ConvertShapes(doc, refs)
-	pass.PrewarmPaths(doc, pathPrecision(opts), cache)
-	pass.MergePaths(doc, refs, pathPrecision(opts), cache)
-	pass.OptimizePaths(doc, pathPrecision(opts), cache)
+	pass.PrewarmPaths(doc, prec, cache)
+	pass.MergePaths(doc, refs, prec, cache)
+	pass.OptimizePaths(doc, prec, cache)
 	return dom.Serialize(doc), nil
 }
 
 // pathPrecision maps the public contract (0 = exact) onto the internal one
-// (negative = exact).
-func pathPrecision(opts Options) int {
+// (negative = exact). Documents whose root viewBox spans only a few units
+// (drawings exported in physical units: a CorelDRAW trace lives in 2×3
+// inches) get extra decimals: the requested count is meant for the usual
+// hundreds-of-units canvas, and on a two-unit canvas the same tolerance is
+// a visible fraction of the whole image.
+func pathPrecision(opts Options, doc *dom.Node) int {
 	if opts.Precision <= 0 {
 		return -1
 	}
-	return opts.Precision
+	p := opts.Precision
+	if s := docScale(doc); s > 0 && s < 10 {
+		if need := int(math.Ceil(5.4 - math.Log10(s))); need > p {
+			p = min(need, 8)
+		}
+	}
+	return p
+}
+
+// docScale returns the larger dimension of the root svg viewBox, falling
+// back to unitless (or px) width/height; 0 when unknown.
+func docScale(doc *dom.Node) float64 {
+	var root *dom.Node
+	for _, c := range doc.Children {
+		if c.Kind == dom.KindElement {
+			name := c.Name
+			if i := strings.IndexByte(name, ':'); i >= 0 {
+				name = name[i+1:]
+			}
+			if name == "svg" {
+				root = c
+			}
+			break
+		}
+	}
+	if root == nil {
+		return 0
+	}
+	if vb, ok := root.AttrValue("viewBox"); ok {
+		f := strings.FieldsFunc(vb, func(r rune) bool { return r == ' ' || r == ',' || r == '\t' || r == '\n' })
+		if len(f) == 4 {
+			w, err1 := strconv.ParseFloat(f[2], 64)
+			h, err2 := strconv.ParseFloat(f[3], 64)
+			if err1 == nil && err2 == nil {
+				return max(math.Abs(w), math.Abs(h))
+			}
+		}
+		return 0
+	}
+	dim := 0.0
+	for _, name := range [...]string{"width", "height"} {
+		v, ok := root.AttrValue(name)
+		if !ok {
+			continue
+		}
+		v = strings.TrimSuffix(strings.TrimSpace(v), "px")
+		if x, err := strconv.ParseFloat(v, 64); err == nil {
+			dim = max(dim, math.Abs(x))
+		}
+	}
+	return dim
 }
 
 // transformPrecision only ever rounds transforms when explicitly asked to.

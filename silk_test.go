@@ -218,3 +218,17 @@ func BenchmarkOptimizeManyPaths(b *testing.B) {
 		}
 	}
 }
+
+func TestTinyViewBoxRaisesPrecision(t *testing.T) {
+	// A drawing exported in physical units lives in a couple of user units;
+	// the default 3 decimals would displace geometry by a visible fraction
+	// of the whole canvas.
+	in := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1.77469 2.93776"><path fill="#C17853" d="M0.407743 1.59755l0.0709571 0.000771788 0.0192809 -0.0208245z"/></svg>`)
+	out, err := Optimize(in, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(".40774")) {
+		t.Errorf("tiny-viewBox document rounded at default precision: %s", out)
+	}
+}
