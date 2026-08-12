@@ -323,6 +323,47 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v0.5.0 — Sixteen rendering fixes from a 7,648-file stress campaign (2026-08-12)
+
+- The test corpus grew from 100 to 7,648 files: 5,384 real-world SVGs from
+  Wikimedia Commons plus the W3C SVG 1.1 and resvg test suites. Every
+  fidelity failure was root-caused; silk now passes the pixel gate on
+  99.4 % of the corpus with not a single strongly-differing file left
+  (the remainder is sub-tolerance anti-aliasing drift).
+- Fixed: direct children of `<switch>` are no longer unwrapped, removed or
+  merged — only the first eligible child renders, so the child list is
+  semantic. Illustrator's switch+foreignObject pattern lost up to 97 % of
+  its pixels.
+- Fixed: paths carrying markers no longer merge; marker-start/end render
+  at the ends of the whole path, so joining deleted arrowheads at the seam.
+- Fixed: nearly closed elliptical arcs (tiny chord, large-arc flag) now
+  keep their exact chord — rounding rotated the whole figure by up to
+  hundreds of times the tolerance. Generated arcs are validated against
+  the renderer's centre reconstruction, closing the same instability for
+  circles emitted as half-turn arc pairs.
+- Fixed: `stroke-width` is never rounded (miter joins at needle-sharp
+  corners amplify a width error without bound), and the kappa-tolerance
+  arc conversion is restricted to provably unstroked geometry.
+- Fixed: several style-rewriting precedence errors — an initial-value
+  declaration shadowing a different-valued attribute or stylesheet rule is
+  kept; `marker`/`font` longhands stay beside their CSS-only shorthand;
+  non-lowercase property spellings are left untouched.
+- Fixed: XML comments inside `<style>` are kept (some renderers discard
+  the whole sheet when present, so removing them activated dead rules),
+  non-ASCII ids referenced from stylesheets are no longer truncated, and
+  unreferenced `<defs>` entries survive when a stylesheet exists — used
+  content matches structural selectors in its original tree position.
+- Fixed: a DTD internal subset pins namespace declarations (entity text
+  can use any prefix), shape-to-path conversion preserves the namespace
+  prefix, group transforms stay off `transform-origin` carriers,
+  `xml:space` survives on `<tref>`, smooth-shorthand reflection breaks at
+  movetos, and zero-length control handles survive rounding.
+- The fidelity harness now measures pixels composited over extreme
+  backgrounds, so alpha-edge artifacts no longer count as differences no
+  background could display. Under this fairer metric svgo fails 9 of the
+  100 benchmark files (measured 14 under the old one).
+- Output sizes are unchanged: 64.4 % of input in total, 58.6 % median.
+
 ### v0.4.0 — Arc and quadratic conversion, shape-to-path, corpus doubled (2026-07-03)
 
 - New: runs of cubic curves tracing a common circle become endpoint arcs
