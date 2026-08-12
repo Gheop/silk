@@ -126,8 +126,16 @@ func OptimizePresentation(doc *dom.Node, refs *Refs, prec int) {
 			minifyStylesheetText(n)
 		}
 		if names, ok := geoAttrs[localName(n.Name)]; ok {
+			gp := prec
+			if prec >= 0 {
+				if bump, bok := scaleBump(n); !bok {
+					gp = -1 // unbounded amplification: reformat exactly
+				} else {
+					gp = min(prec+bump, 8)
+				}
+			}
 			for _, name := range names {
-				roundAttr(n, name, prec)
+				roundAttr(n, name, gp)
 			}
 		}
 		for name := range numericRoundProps {

@@ -42,3 +42,14 @@ func TestDashedPathsKeepExactCoordinates(t *testing.T) {
 		t.Errorf("dashed path not at raised precision: %q", out)
 	}
 }
+
+func TestScaledSubtreesKeepPrecision(t *testing.T) {
+	// A ×200 cumulative transform turns a half-thousandth rounding into a
+	// 0.1-unit displacement: precision follows the amplification.
+	doc := parse(t, `<svg><g transform="scale(200)"><path d="M0.0016033 0.023L1.0004567 2.0001234"/></g></svg>`)
+	OptimizePaths(doc, 3, NewPathCache())
+	out := string(dom.Serialize(doc))
+	if !strings.Contains(out, ".0016 ") && !strings.Contains(out, ".0016.") && !strings.Contains(out, ".0016L") {
+		t.Errorf("scaled path rounded at base precision: %q", out)
+	}
+}

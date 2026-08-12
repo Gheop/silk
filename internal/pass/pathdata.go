@@ -4,6 +4,7 @@
 package pass
 
 import (
+	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -163,6 +164,13 @@ func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear b
 	if localName(n.Name) != "path" {
 		return prec, false, false
 	}
+	if prec >= 0 {
+		bump, ok := scaleBump(n)
+		if !ok {
+			return -1, false, false // unbounded amplification: keep exact
+		}
+		prec = min(prec+bump, 8)
+	}
 	if underFilter(n) {
 		// A filter's primitives sample relative to the geometry, so segment
 		// removal and vertex merging (which can change the tight bbox) stay
@@ -182,9 +190,42 @@ func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear b
 		// length errors accumulate along the stroke by the segment count.
 		// Two extra decimals keep the accumulated phase error below a
 		// fraction of a period on paths thousands of segments long.
-		return min(prec+2, 8), false, false
+		return min(prec+2, 10), false, false
 	}
 	return prec, docSafe && noopSafeElement(n), docSafe && markerSafeElement(n)
+}
+
+// scaleBump returns the extra decimals the element's cumulative transform
+// scale demands: a subtree scaled ×200 turns a half-thousandth rounding into
+// a 0.1-unit displacement in the viewport. The bound is the product of the
+// max column norms of every transform in scope; an unparseable transform
+// reports ok=false (no bound at all).
+func scaleBump(n *dom.Node) (int, bool) {
+	s := 1.0
+	for e := n; e != nil && e.Kind == dom.KindElement; e = e.Parent {
+		if !e.HasAttr("transform") {
+			continue
+		}
+		v, ok := e.AttrValue("transform")
+		if !ok {
+			return 0, false
+		}
+		m, err := parseTransformList(v)
+		if err != nil {
+			return 0, false
+		}
+		s *= max(math.Hypot(m.a, m.b), math.Hypot(m.c, m.d))
+	}
+	// Scales up to ×4 keep the displacement of a half-thousandth rounding
+	// under two thousandths of a unit — below anything the pixel gate can
+	// see. Beyond that, one decimal per decade.
+	s /= 4
+	bump := 0
+	for s > 1 && bump < 8 {
+		s /= 10
+		bump++
+	}
+	return bump, true
 }
 
 // dashSafeElement reports whether the element provably carries no dash
