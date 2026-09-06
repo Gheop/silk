@@ -13,7 +13,7 @@ var corpusDir = func() string {
 	if d := os.Getenv("SILK_CORPUS"); d != "" {
 		return d
 	}
-	return "testdata/corpus"
+	return "../../testdata/corpus"
 }()
 
 func corpusSVGs(t *testing.T) []string {
