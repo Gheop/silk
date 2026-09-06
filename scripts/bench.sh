@@ -6,7 +6,11 @@
 set -u
 export LC_ALL=C
 
-corpus="${1:-/home/sib/src/benchmarkpatu/datasets}"
+corpus="${1:-${SILK_CORPUS:-}}"
+if [ -z "$corpus" ] || [ ! -d "$corpus" ]; then
+  echo "usage: scripts/bench.sh <corpus-dir>  (or set SILK_CORPUS)" >&2
+  exit 2
+fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
