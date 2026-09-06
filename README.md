@@ -139,7 +139,7 @@ minimal passes.
 
 | Variable | Used by | Description |
 |---|---|---|
-| `SILK_CORPUS` | tests only | Path to a directory of SVG files for the fidelity and round-trip test suites. Defaults to `testdata/corpus` (empty in this repository). The library and CLI read no environment variables. |
+| `SILK_CORPUS` | tests only | Path to a directory of SVG files for the fidelity and round-trip test suites. Defaults to `testdata/corpus`, the committed 158-file subset of the W3C and resvg test suites. The library and CLI read no environment variables. |
 
 ## What it does
 
