@@ -61,8 +61,8 @@ The image is published to two registries. Each release tag `vX.Y.Z`
 publishes `X.Y.Z` and updates `latest`:
 
 ```
-docker pull ghcr.io/gheop/silk:0.6.0
-docker pull registry.gitlab.com/gheop/silk:0.6.0
+docker pull ghcr.io/gheop/silk:0.6.1
+docker pull registry.gitlab.com/gheop/silk:0.6.1
 ```
 
 The image is built from `scratch` and contains only the static binary.
@@ -105,7 +105,7 @@ The container reads stdin and writes stdout. Pass CLI flags after the
 image name:
 
 ```
-docker run -i ghcr.io/gheop/silk:0.6.0 -precision 2 < input.svg > output.svg
+docker run -i ghcr.io/gheop/silk:0.6.1 -precision 2 < input.svg > output.svg
 ```
 
 ## Configuration
@@ -322,6 +322,29 @@ SILK_CORPUS=/path/to/your/svgs go test ./...
 MIT — see [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.6.1 — Fewer allocations, fidelity gate in CI, hardened tooling (2026-09-06)
+
+- Performance, with byte-identical output on the whole corpus: merge
+  candidates are no longer re-parsed before the cheap rejections, the
+  collinear-merge pass batches its allocations, and serialization
+  pre-sizes its buffer. On the reference corpus: −14 % allocated bytes,
+  −26 % allocations, and −12.5 % wall time on merge-heavy documents.
+- The pixel-fidelity and round-trip suites now run in CI on a committed,
+  redistributable 158-file corpus (W3C SVG 1.1 and resvg test suites,
+  attributions in `testdata/corpus/README.md`); previously they only ran
+  against a private corpus on the maintainer's machine.
+- CI installs resvg from a pinned, checksum-verified release with retries,
+  and tests on both the declared minimum Go (1.25) and current stable.
+  An allocation budget test fails the suite on regressions.
+- Fixed: the CLI exits non-zero when writing its output fails (a closed
+  pipe or full disk used to yield a truncated document with exit 0); the
+  command is now covered by tests.
+- Fixed: the corpus round-trip test compares UTF-16 files after
+  transcoding, as the format contract intends.
+- `scripts/bench.sh` takes its corpus from the argument or `SILK_CORPUS`.
+- Dependency: tdewolff/parse v2.8.16. The arc machinery moved to its own
+  file; no behavior change.
 
 ### v0.6.0 — UTF-16 input, differential render fuzzing, scale-aware precision (2026-08-12)
 
