@@ -232,3 +232,35 @@ func TestTinyViewBoxRaisesPrecision(t *testing.T) {
 		t.Errorf("tiny-viewBox document rounded at default precision: %s", out)
 	}
 }
+
+// BenchmarkOptimizeCorpus runs the whole corpus once per iteration: the
+// closest proxy for service throughput on the real workload distribution.
+func BenchmarkOptimizeCorpus(b *testing.B) {
+	if _, err := os.Stat(corpusDir); err != nil {
+		b.Skip(err)
+	}
+	var files [][]byte
+	var total int64
+	filepath.WalkDir(corpusDir, func(path string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && filepath.Ext(path) == ".svg" {
+			if in, rerr := os.ReadFile(path); rerr == nil {
+				files = append(files, in)
+				total += int64(len(in))
+			}
+		}
+		return nil
+	})
+	if len(files) == 0 {
+		b.Skip("empty corpus")
+	}
+	opts := DefaultOptions()
+	b.SetBytes(total)
+	b.ResetTimer()
+	for b.Loop() {
+		for _, in := range files {
+			if _, err := Optimize(in, opts); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
