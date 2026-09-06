@@ -300,8 +300,17 @@ func mergeCollinear(cs []Cmd, tol float64) []Cmd {
 	var mids [][2]float64  // intermediate vertices of the run
 	inRun := false
 
+	var arena []float64 // shared backing for emitted Args: block allocations
+	arenaBlock := 8     // most paths flush a handful of runs; big ones double up
 	flush := func(endX, endY float64) {
-		out = append(out, Cmd{Op: 'L', Args: []float64{endX, endY}})
+		if len(arena) < 2 {
+			arena = make([]float64, arenaBlock)
+			arenaBlock = min(arenaBlock*4, 4096)
+		}
+		args := arena[:2:2]
+		arena = arena[2:]
+		args[0], args[1] = endX, endY
+		out = append(out, Cmd{Op: 'L', Args: args})
 	}
 	endRun := func() {
 		if inRun {
