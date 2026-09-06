@@ -95,10 +95,6 @@ func (m *merger) canMerge(a, b *dom.Node, acc *bbox) (bool, *bbox, string) {
 	if !okA || !okB {
 		return false, nil, ""
 	}
-	dbNorm, okN := normalizeForJoin(db)
-	if !okN {
-		return false, nil, ""
-	}
 	inflate, ok := strokeReach(a)
 	if !ok {
 		return false, nil, ""
@@ -113,6 +109,12 @@ func (m *merger) canMerge(a, b *dom.Node, acc *bbox) (bool, *bbox, string) {
 	}
 	bb, okBB := m.cache.emittedBBox(db, pB, noopsB, colB)
 	if ba == nil || !okBB || !disjoint(*ba, bb, inflate) {
+		return false, nil, ""
+	}
+	// Normalization re-parses b's data: it runs last, only for merges that
+	// will actually happen — failed attempts vastly outnumber merges.
+	dbNorm, okN := normalizeForJoin(db)
+	if !okN {
 		return false, nil, ""
 	}
 	union := bbox{
