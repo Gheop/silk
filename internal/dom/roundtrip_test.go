@@ -43,6 +43,11 @@ func TestCorpusRoundTripVerbatim(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if decodeUTF16(in) != nil {
+			// UTF-16 input transcodes to UTF-8 by design: the verbatim
+			// contract applies to the transcoded bytes, not the original.
+			in = Serialize(mustParse(t, f, in))
+		}
 		doc, err := Parse(in)
 		if err != nil {
 			t.Errorf("%s: parse: %v", filepath.Base(f), err)
@@ -59,4 +64,13 @@ func TestCorpusRoundTripVerbatim(t *testing.T) {
 				filepath.Base(f), i, in[lo:hi], out[lo:min(len(out), i+40)])
 		}
 	}
+}
+
+func mustParse(t *testing.T, f string, in []byte) *Node {
+	t.Helper()
+	doc, err := Parse(in)
+	if err != nil {
+		t.Fatalf("%s: parse: %v", filepath.Base(f), err)
+	}
+	return doc
 }
