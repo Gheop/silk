@@ -4,8 +4,7 @@ test:
   stage: test
   image: golang:1.26
   script:
-    - curl -sL -o /tmp/resvg.tar.gz https://github.com/linebender/resvg/releases/download/v0.47.0/resvg-linux-x86_64.tar.gz
-    - tar -xzf /tmp/resvg.tar.gz -C /tmp && install -m755 /tmp/resvg /usr/local/bin/resvg
+    - sh scripts/ci-install-resvg.sh
     - test -z "$(gofmt -l .)"
     - go vet ./...
     - go test ./...

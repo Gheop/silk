@@ -9,16 +9,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        # Oldest supported (go.mod) and current stable: the declared
+        # minimum stays honest instead of only ever compiling on latest.
+        go: ['1.25', 'stable']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: stable
+          go-version: ${{ matrix.go }}
       - name: Install resvg (fidelity harness renderer)
-        run: |
-          curl -sL -o /tmp/resvg.tar.gz https://github.com/linebender/resvg/releases/download/v0.47.0/resvg-linux-x86_64.tar.gz
-          tar -xzf /tmp/resvg.tar.gz -C /tmp
-          sudo install -m755 /tmp/resvg /usr/local/bin/resvg
+        run: sudo sh scripts/ci-install-resvg.sh
       - name: Formatting
         run: test -z "$(gofmt -l .)"
       - name: Vet
@@ -38,7 +42,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Log in to ghcr.io
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Build and push
