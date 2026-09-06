@@ -12,25 +12,33 @@ import (
 )
 
 func main() {
-	precision := flag.Int("precision", 3, "decimal places kept for coordinates; 0 keeps exact values")
-	transformPrecision := flag.Int("transform-precision", 0, "decimal places for transform translations; 0 keeps exact values")
-	singlePass := flag.Bool("single-pass", false, "run the pipeline once instead of until stable")
-	flag.Parse()
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("silk", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	precision := fs.Int("precision", 3, "decimal places kept for coordinates; 0 keeps exact values")
+	transformPrecision := fs.Int("transform-precision", 0, "decimal places for transform translations; 0 keeps exact values")
+	singlePass := fs.Bool("single-pass", false, "run the pipeline once instead of until stable")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 
 	var in []byte
 	var err error
-	switch flag.NArg() {
+	switch fs.NArg() {
 	case 0:
-		in, err = io.ReadAll(os.Stdin)
+		in, err = io.ReadAll(stdin)
 	case 1:
-		in, err = os.ReadFile(flag.Arg(0))
+		in, err = os.ReadFile(fs.Arg(0))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: silk [flags] [file.svg]")
-		os.Exit(2)
+		fmt.Fprintln(stderr, "usage: silk [flags] [file.svg]")
+		return 2
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "silk:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "silk:", err)
+		return 1
 	}
 
 	out, err := silk.Optimize(in, silk.Options{
@@ -39,8 +47,14 @@ func main() {
 		Multipass:          !*singlePass,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "silk:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "silk:", err)
+		return 1
 	}
-	os.Stdout.Write(out)
+	// A short or failed write (closed pipe, full disk) must not exit 0: the
+	// consumer would treat a truncated document as a valid SVG.
+	if _, err := stdout.Write(out); err != nil {
+		fmt.Fprintln(stderr, "silk: write:", err)
+		return 1
+	}
+	return 0
 }
