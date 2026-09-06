@@ -39,7 +39,7 @@ func Parse(svg []byte) (*Node, error) {
 	in := parse.NewInputBytes(work)
 	l := xml.NewLexer(in)
 
-	doc := &Node{Kind: KindDocument}
+	doc := &Node{Kind: KindDocument, srcLen: len(svg)}
 	cur := doc
 	depth := 0
 	var open *Node // node whose start tag is being lexed (element or PI)

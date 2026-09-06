@@ -7,6 +7,7 @@ import "bytes"
 // tag in which untouched attributes still keep their original spelling.
 func Serialize(doc *Node) []byte {
 	var b bytes.Buffer
+	b.Grow(doc.srcLen + 64)
 	for _, c := range doc.Children {
 		writeNode(&b, c)
 	}

@@ -42,6 +42,10 @@ func (a *Attr) Value() (string, bool) {
 
 // Node is a document, element, or leaf (text, comment, CDATA, doctype, PI).
 type Node struct {
+	// srcLen, on the document node, is the byte length of the parsed input:
+	// serialization pre-sizes its buffer with it (output rarely exceeds it).
+	srcLen int
+
 	Kind     Kind
 	Name     string // element or PI name as written, including prefix
 	Attrs    []Attr
