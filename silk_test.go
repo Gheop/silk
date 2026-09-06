@@ -264,3 +264,29 @@ func BenchmarkOptimizeCorpus(b *testing.B) {
 		}
 	}
 }
+
+// TestAllocationBudget fails when a change regresses the optimizer's
+// allocation footprint on the committed corpus. Both counters are
+// deterministic, so this guards in CI where wall time cannot. When a
+// deliberate change moves the footprint, re-measure with
+// `go test -run xxx -bench BenchmarkOptimizeCorpus -benchtime 1x -benchmem .`
+// and adjust the budgets (reference + ~15% headroom for toolchain drift).
+func TestAllocationBudget(t *testing.T) {
+	if _, err := os.Stat(corpusDir); err != nil {
+		t.Skipf("corpus not available: %v", err)
+	}
+	const (
+		maxAllocs = 178000   // measured 154.6k (go1.26)
+		maxBytes  = 18500000 // measured 16.1MB (go1.26)
+	)
+	res := testing.Benchmark(BenchmarkOptimizeCorpus)
+	if res.N == 0 {
+		t.Skip("benchmark did not run")
+	}
+	if a := res.AllocsPerOp(); a > maxAllocs {
+		t.Errorf("allocs/op regressed: %d > budget %d", a, maxAllocs)
+	}
+	if b := res.AllocedBytesPerOp(); b > maxBytes {
+		t.Errorf("B/op regressed: %d > budget %d", b, maxBytes)
+	}
+}
