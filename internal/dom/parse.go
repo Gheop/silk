@@ -96,6 +96,11 @@ func Parse(svg []byte) (*Node, error) {
 			}
 
 		case xml.StartTagCloseToken:
+			if open.Kind != KindElement {
+				// "<?xml ...>" closed like an element: the lexer accepts it,
+				// but neither the PI nor an element could be written back.
+				return nil, fmt.Errorf("dom: malformed processing instruction <?%s", open.Name)
+			}
 			open.rawStart = svg[tagStart:off:off]
 			open.Parent = cur
 			cur.Children = append(cur.Children, open)
@@ -107,6 +112,9 @@ func Parse(svg []byte) (*Node, error) {
 			}
 
 		case xml.StartTagCloseVoidToken:
+			if open.Kind != KindElement {
+				return nil, fmt.Errorf("dom: malformed processing instruction <?%s", open.Name)
+			}
 			open.rawStart = svg[tagStart:off:off]
 			open.SelfClosing = true
 			open.Parent = cur

@@ -258,3 +258,13 @@ func TestSerializeKeepsWhitespaceReferences(t *testing.T) {
 		t.Errorf("re-parsed value %q", v)
 	}
 }
+
+func TestMalformedProcessingInstructionIsAnError(t *testing.T) {
+	// A PI closed with ">" or "/>" used to be silently dropped from the
+	// output; the contract is verbatim or error.
+	for _, in := range []string{`<?xml version="1.0"/><svg/>`, `<?a><b/></a><svg/>`} {
+		if _, err := Parse([]byte(in)); err == nil {
+			t.Errorf("Parse(%q) accepted a malformed processing instruction", in)
+		}
+	}
+}
