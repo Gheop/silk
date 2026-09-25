@@ -131,11 +131,12 @@ func (p *pen) advance(c Cmd) {
 // arcConverter carries one convertArcs call: the input, the output so far,
 // and the pen at the end of what has been emitted.
 type arcConverter struct {
-	cs   []Cmd
-	out  []Cmd
-	tol  float64
-	prec int
-	pen  pen
+	cs    []Cmd
+	out   []Cmd
+	tol   float64
+	prec  int
+	pen   pen
+	group []arcSeg // reused by run: most fitted cubics start a run of one
 }
 
 // convertRun tries to replace the cubics starting at i with arcs and
@@ -171,7 +172,7 @@ func (a *arcConverter) convertRun(i int) int {
 // circle, then gives back the trailing ones a smooth command after the run
 // would reflect.
 func (a *arcConverter) run(i int, fit arcFit, first arcSeg) []arcSeg {
-	group := []arcSeg{first}
+	group := append(a.group[:0], first)
 	sweep := first.delta
 	// A shadow pen walks the run; the real one stays at its start.
 	g := a.pen
@@ -198,6 +199,7 @@ func (a *arcConverter) run(i int, fit arcFit, first arcSeg) []arcSeg {
 		group = group[:len(group)-1]
 		j--
 	}
+	a.group = group
 	return group
 }
 
