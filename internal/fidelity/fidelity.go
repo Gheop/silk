@@ -278,6 +278,9 @@ func Compare(t *testing.T, name string, original, optimized []byte) {
 func CompareChrome(t *testing.T, name string, original, optimized []byte) {
 	t.Helper()
 	if ChromePath() == "" {
+		if os.Getenv("SILK_REQUIRE_CHROME") != "" {
+			t.Fatal("chrome not installed and SILK_REQUIRE_CHROME is set")
+		}
 		t.Skip("chrome not installed; skipping browser fidelity check")
 	}
 	compareWith(t, Chrome, "chrome", name, original, optimized)

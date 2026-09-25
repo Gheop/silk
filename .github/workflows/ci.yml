@@ -48,6 +48,10 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Tests
+        # The runner image ships Google Chrome; the browser fidelity check
+        # must run there, not silently skip.
+        env:
+          SILK_REQUIRE_CHROME: 1
         run: go test ./...
       - name: Race
         # The library is called concurrently by servers; one Go version is
