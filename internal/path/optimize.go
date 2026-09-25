@@ -954,8 +954,15 @@ func (st *state) flushPending() {
 // separators.
 func lowerBoundLen(args []float64) int {
 	n := 0
-	for _, v := range args {
-		v = math.Abs(v)
+	for i, v := range args {
+		if v < 0 {
+			v = -v
+			if v >= 1 {
+				n++ // rounding keeps a magnitude of one or more nonzero and signed
+			}
+		} else if i > 0 && v >= 1 {
+			n++ // starts with a digit after a number: a separator is unavoidable
+		}
 		switch {
 		case v < 10:
 			n++
@@ -1019,7 +1026,11 @@ func (st *state) choose(cs []cand) *cand {
 	var bestOpen bool
 	bestEncoded := -1 // scratch index when the best had to be really encoded
 	for i := range cs {
-		if lowerBoundLen(cs[i].args[:cs[i].nargs]) >= bestLen {
+		lb := lowerBoundLen(cs[i].args[:cs[i].nargs])
+		if cs[i].op != st.implicit || cs[i].nargs == 0 {
+			lb++ // the command letter is emitted
+		}
+		if lb >= bestLen {
 			continue
 		}
 		if n, kind, open, ok := st.candLen(&cs[i]); ok {
