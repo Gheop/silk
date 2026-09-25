@@ -1,8 +1,10 @@
 package pass
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Gheop/silk/internal/dom"
 )
@@ -69,5 +71,23 @@ func TestScaleBumpSeesNestedViewports(t *testing.T) {
 	OptimizePaths(doc, Analyze(doc), 3, NewPathCache())
 	if got := string(dom.Serialize(doc)); !strings.Contains(got, ".12345") {
 		t.Errorf("coordinates rounded under an inline CSS transform: %q", got)
+	}
+}
+
+func TestPathOptionsLinearInSiblings(t *testing.T) {
+	// The marker and dash guards walk ancestors for every path; looking at
+	// each ancestor's children while doing so made a parent with tens of
+	// thousands of shapes quadratic (a 1 MiB corpus file took 10 minutes).
+	var sb strings.Builder
+	sb.WriteString("<svg>")
+	for i := range 40000 {
+		fmt.Fprintf(&sb, `<path d="M%d 0h1"/>`, i)
+	}
+	sb.WriteString("</svg>")
+	doc := parse(t, sb.String())
+	start := time.Now()
+	OptimizePaths(doc, Analyze(doc), 3, NewPathCache())
+	if el := time.Since(start); el > 3*time.Second {
+		t.Errorf("40k sibling paths took %v", el)
 	}
 }
