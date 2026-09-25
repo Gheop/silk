@@ -50,9 +50,12 @@ jobs:
       - name: Tests
         run: go test ./...
       - name: Fuzz smoke
+        # Both targets share the 20 s budget in parallel: a smoke run, not a
+        # campaign, so halving the workers per target costs nothing useful.
         run: |
-          go test -fuzz=FuzzParse -fuzztime=20s -run FuzzParse ./internal/path/
-          go test -fuzz=FuzzOptimize -fuzztime=20s -run FuzzOptimize .
+          go test -fuzz=FuzzParse -fuzztime=20s -run FuzzParse ./internal/path/ &
+          go test -fuzz=FuzzOptimize -fuzztime=20s -run FuzzOptimize . &
+          wait %1 && wait %2
 
   image:
     needs: test
