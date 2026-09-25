@@ -1,7 +1,10 @@
 package pass
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Gheop/silk/internal/dom"
 )
@@ -91,5 +94,34 @@ func TestCollapseGroupsKeepsGroupInClipPath(t *testing.T) {
 	in := `<svg><clipPath id="c"><g><path d="M0 0h1v1z"/></g></clipPath><path clip-path="url(#c)" d="M0 0h9v9z"/></svg>`
 	if got := runGroups(t, in); got != in {
 		t.Errorf("group in clipPath collapsed:\n got: %q\nwant: %q", got, in)
+	}
+}
+
+func TestCollapseGroupsLinear(t *testing.T) {
+	// Fifty thousand sibling groups used to cost a splice each (11 s).
+	var sb strings.Builder
+	sb.WriteString("<svg>")
+	for i := range 50000 {
+		fmt.Fprintf(&sb, `<g><path d="M%d 0h1"/></g>`, i)
+	}
+	sb.WriteString("</svg>")
+	start := time.Now()
+	doc := parse(t, sb.String())
+	CollapseGroups(doc, Analyze(doc))
+	if el := time.Since(start); el > 3*time.Second {
+		t.Errorf("50k groups took %v: collapsing is not linear", el)
+	}
+	if n := len(doc.Children[0].Children); n != 50000 {
+		t.Errorf("got %d children after collapsing, want 50000", n)
+	}
+	for _, c := range doc.Children[0].Children {
+		if c.Parent != doc.Children[0] || c.Name != "path" {
+			t.Fatalf("child %s with wrong parent or name", c.Name)
+		}
+	}
+	// Nesting still collapses fully in one call.
+	got := runGroups(t, `<svg><g><g><g fill="red"><path d="M0 0"/></g></g></g></svg>`)
+	if want := `<svg><path d="M0 0" fill="red"/></svg>`; got != want {
+		t.Errorf("nested collapse:\n got: %q\nwant: %q", got, want)
 	}
 }

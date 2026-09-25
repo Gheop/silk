@@ -29,20 +29,52 @@ func CollapseGroups(doc *dom.Node, refs *Refs) {
 	if refs.HasStylesheet {
 		return
 	}
-	for {
-		changed := false
-		doc.Walk(func(n *dom.Node) bool {
-			if n.Kind == dom.KindElement && collapseGroup(n, refs) {
-				changed = true
-			}
-			return true
-		})
-		if !changed {
-			return
-		}
+	// Unwrapping is decided bottom-up and applied per parent by rebuilding
+	// its child list once, so a document with n sibling groups costs O(n)
+	// rather than O(n²) of splices. A pass can enable more collapses above
+	// (a group left with a lone child), hence the fixed-point loop.
+	for collapseChildren(doc, refs) {
 	}
 }
 
+// collapseChildren unwraps the collapsible groups among p's descendants,
+// deepest first, and reports whether anything changed.
+func collapseChildren(p *dom.Node, refs *Refs) bool {
+	changed := false
+	for _, c := range p.Children {
+		if c.Kind == dom.KindElement && len(c.Children) > 0 && collapseChildren(c, refs) {
+			changed = true
+		}
+	}
+	unwrap := 0
+	for _, c := range p.Children {
+		if c.Kind == dom.KindElement && collapseGroup(c, refs) {
+			unwrap++
+		}
+	}
+	if unwrap == 0 {
+		return changed
+	}
+	kept := make([]*dom.Node, 0, len(p.Children)+unwrap)
+	for _, c := range p.Children {
+		if c.Kind == dom.KindElement && c.Parent == nil {
+			// Marked by collapseGroup: its children take its place.
+			for _, gc := range c.Children {
+				gc.Parent = p
+			}
+			kept = append(kept, c.Children...)
+			c.Children = nil
+			continue
+		}
+		kept = append(kept, c)
+	}
+	p.Children = kept
+	return true
+}
+
+// collapseGroup decides whether g unwraps, pushes its attributes onto its
+// lone child when it does, and marks it (Parent cleared) for the caller to
+// splice its children in place.
 func collapseGroup(g *dom.Node, refs *Refs) bool {
 	if localName(g.Name) != "g" || g.Parent == nil || underSwitch(g) {
 		return false
@@ -56,7 +88,7 @@ func collapseGroup(g *dom.Node, refs *Refs) bool {
 		return false
 	}
 	if len(g.Attrs) == 0 {
-		g.ReplaceWithChildren()
+		g.Parent = nil
 		return true
 	}
 	child := loneElementChild(g)
@@ -113,7 +145,7 @@ func collapseGroup(g *dom.Node, refs *Refs) bool {
 	for _, m := range moves {
 		child.SetAttr(m.name, m.value)
 	}
-	g.ReplaceWithChildren()
+	g.Parent = nil
 	return true
 }
 
