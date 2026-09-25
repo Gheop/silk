@@ -62,7 +62,7 @@ func TestConvertTransformsKeepsOverflowingMatrix(t *testing.T) {
 func TestGradientTransformTranslationStaysExactInBBoxUnits(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`<svg><linearGradient gradientTransform="translate(0.0004 0)"/></svg>`,
-			`<svg><linearGradient gradientTransform="translate(.0004)"/></svg>`},
+			`<svg><linearGradient gradientTransform="translate(4e-4)"/></svg>`},
 		{`<svg><linearGradient gradientUnits="userSpaceOnUse" gradientTransform="translate(0.0004 0)"/></svg>`,
 			`<svg><linearGradient gradientUnits="userSpaceOnUse"/></svg>`},
 	}
