@@ -406,3 +406,12 @@ func TestDoublyDegenerateCubicKeepsOutgoingTangent(t *testing.T) {
 		t.Errorf("residual leaked into a degenerate handle: %s", out)
 	}
 }
+
+func TestArcCandidateBoundDoesNotOvercount(t *testing.T) {
+	// After a flag no separator is written, so the absolute form here is
+	// one byte shorter than the relative one and must not be pruned.
+	got := opt(t, "M.5 0A5 5 30 1 1 10 10", Options{Precision: 3})
+	if want := "M.5 0A5 5 30 1110 10"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

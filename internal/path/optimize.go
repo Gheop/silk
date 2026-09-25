@@ -1097,16 +1097,23 @@ func (st *state) flushPending() {
 
 // lowerBoundLen is a cheap bound that no encoding of args can beat: at least
 // the integer digits of every argument, ignoring signs, fractions, and
-// separators.
-func lowerBoundLen(args []float64) int {
+// separators. For an arc the two flags are single digits after which the
+// emitter needs no separator.
+func lowerBoundLen(op byte, args []float64) int {
+	arc := op|0x20 == 'a'
 	n := 0
 	for i, v := range args {
+		if arc && (i == 3 || i == 4) {
+			n++
+			continue
+		}
+		afterFlag := arc && i == 5
 		if v < 0 {
 			v = -v
 			if v >= 1 {
 				n++ // rounding keeps a magnitude of one or more nonzero and signed
 			}
-		} else if i > 0 && v >= 1 {
+		} else if i > 0 && v >= 1 && !afterFlag {
 			n++ // starts with a digit after a number: a separator is unavoidable
 		}
 		switch {
@@ -1121,7 +1128,7 @@ func lowerBoundLen(args []float64) int {
 		case v < 100000:
 			n += 5
 		default:
-			n += 6
+			n += 3 // 1e5 and up may print in exponent form
 		}
 	}
 	return n
@@ -1172,7 +1179,7 @@ func (st *state) choose(cs []cand) *cand {
 	var bestOpen bool
 	bestEncoded := -1 // scratch index when the best had to be really encoded
 	for i := range cs {
-		lb := lowerBoundLen(cs[i].args[:cs[i].nargs])
+		lb := lowerBoundLen(cs[i].op, cs[i].args[:cs[i].nargs])
 		if cs[i].op != st.implicit || cs[i].nargs == 0 {
 			lb++ // the command letter is emitted
 		}
