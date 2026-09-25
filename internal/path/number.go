@@ -114,7 +114,9 @@ func numInfo(v float64, prec int) (numShape, bool) {
 		return numShape{}, false
 	}
 	p := pow10[prec]
-	r := math.Round(v*p) / p
+	vp := v * p
+	rk := math.Round(vp) // the grid integer, as a float
+	r := rk / p
 	if math.IsInf(r, 0) || math.IsNaN(r) {
 		return numShape{}, false
 	}
@@ -125,7 +127,16 @@ func numInfo(v float64, prec int) (numShape, bool) {
 	if abs < 1e-2 || abs >= 1e5 || abs*p >= 9e15 {
 		return numShape{}, false
 	}
-	k := int64(math.Round(r * p))
+	// r is rk/p; multiplying back rounds once more, and for |rk| below
+	// 2^51 that double rounding stays under half a unit, so the integer is
+	// rk itself and the second Round is skipped. Larger magnitudes keep the
+	// exact two-step form formatNumber uses.
+	var k int64
+	if rk < 2e15 && rk > -2e15 {
+		k = int64(rk)
+	} else {
+		k = int64(math.Round(r * p))
+	}
 	neg := k < 0
 	if neg {
 		k = -k
