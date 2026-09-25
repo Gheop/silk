@@ -295,9 +295,8 @@ func withinChordTube(px, py, ax, ay, bx, by, tol float64) bool {
 func mergeCollinear(cs []Cmd, tol float64) []Cmd {
 	out := make([]Cmd, 0, len(cs))
 	var cx, cy float64
-	var runX, runY float64 // anchor of the current line run
-	var spX, spY float64   // subpath start, for closepath
-	var mids [][2]float64  // intermediate vertices of the run
+	var spX, spY float64 // subpath start, for closepath
+	var run lineRun
 	inRun := false
 
 	var arena []float64 // shared backing for emitted Args: block allocations
@@ -316,7 +315,6 @@ func mergeCollinear(cs []Cmd, tol float64) []Cmd {
 		if inRun {
 			flush(cx, cy)
 			inRun = false
-			mids = mids[:0]
 		}
 	}
 
@@ -368,18 +366,166 @@ func mergeCollinear(cs []Cmd, tol float64) []Cmd {
 			}
 			continue
 		}
-		if inRun && extendsRun(runX, runY, mids, cx, cy, nx, ny, tol) {
-			mids = append(mids, [2]float64{cx, cy})
+		if inRun && run.extend(cx, cy, nx, ny, tol) {
 			cx, cy = nx, ny
 			continue
 		}
 		endRun()
-		runX, runY = cx, cy
+		run.start(cx, cy)
 		inRun = true
 		cx, cy = nx, ny
 	}
 	endRun()
 	return out
+}
+
+// lineRun is a run of line segments being folded into one chord. A
+// candidate end n extends the run when every intermediate vertex lies within
+// tol of [start, n] and the vertices project onto that chord in order.
+//
+// Short runs, the common case, check every vertex directly. That is
+// quadratic in the run length (a 100k-vertex polyline took 25 s), so once a
+// run outgrows coneThreshold it switches to the set of chord directions that
+// satisfy every constraint seen so far, one angular interval about the first
+// segment's direction, which the same criterion expressed per vertex:
+//
+//   - a vertex p at distance r > tol from the start admits directions within
+//     asin(tol/r) of p's own direction (its distance to the chord's line is
+//     then at most tol); a vertex within tol of the start admits any;
+//   - a segment from one vertex to the next admits the half-plane of
+//     directions it projects positively onto: that is the monotone-order
+//     rule, and it also pins every projection inside [0, 1].
+//
+// Intersecting intervals is O(1) per vertex, and within the half-plane of the
+// first segment no interval wraps around, so a plain [lo, hi] suffices.
+//
+// The tube is also capped at 1% of the chord (see withinChordTube). While
+// the chord is shorter than 100·tol that cap moves with every candidate, so
+// such candidates always take the direct check.
+type lineRun struct {
+	sx, sy float64
+	mids   [][2]float64
+
+	cone   bool    // the interval below is built and maintained
+	ref    float64 // direction of the first non-degenerate segment, in radians
+	lo, hi float64 // admissible chord directions, relative to ref
+	hasRef bool    // false while every vertex so far coincides with the start
+}
+
+// coneThreshold is the run length past which the direct check gives way to
+// the angular interval: below it the handful of tube tests is cheaper than
+// the trigonometry.
+const coneThreshold = 32
+
+// maxShortRun bounds the direct check on runs whose chord is still under the
+// 1% cap: such a run spans less than 100·tol, so this only stops a
+// pathological cloud of coincident vertices from going quadratic.
+const maxShortRun = 256
+
+func (r *lineRun) start(sx, sy float64) {
+	r.sx, r.sy = sx, sy
+	r.mids = r.mids[:0]
+	r.cone = false
+}
+
+func (r *lineRun) extend(cx, cy, nx, ny, tol float64) bool {
+	dx, dy := nx-r.sx, ny-r.sy
+	l2 := dx*dx + dy*dy
+	if l2 == 0 {
+		return false
+	}
+	if l2 < 1e4*tol*tol {
+		if len(r.mids) >= maxShortRun || !extendsRun(r.sx, r.sy, r.mids, cx, cy, nx, ny, tol) {
+			return false
+		}
+		if r.cone {
+			r.constrain(cx, cy, nx, ny, tol)
+		}
+		r.mids = append(r.mids, [2]float64{cx, cy})
+		return true
+	}
+	if len(r.mids) < coneThreshold {
+		if !extendsRun(r.sx, r.sy, r.mids, cx, cy, nx, ny, tol) {
+			return false
+		}
+		r.mids = append(r.mids, [2]float64{cx, cy})
+		return true
+	}
+	if !r.cone {
+		r.build(cx, cy, tol)
+	}
+	lo, hi := r.lo, r.hi
+	r.constrain(cx, cy, nx, ny, tol)
+	if a := r.angleTo(nx, ny); a < r.lo || a > r.hi {
+		r.lo, r.hi = lo, hi
+		return false
+	}
+	r.mids = append(r.mids, [2]float64{cx, cy})
+	return true
+}
+
+// build derives the interval from the vertices accepted so far: the start,
+// the mids, and the current end c, which is not yet a mid but whose incoming
+// segment was accepted.
+func (r *lineRun) build(cx, cy, tol float64) {
+	r.cone, r.hasRef = true, false
+	px, py := r.sx, r.sy
+	for _, m := range r.mids {
+		r.segment(px, py, m[0], m[1])
+		r.tube(m[0], m[1], tol)
+		px, py = m[0], m[1]
+	}
+	r.segment(px, py, cx, cy)
+}
+
+// constrain adds what accepting n makes true: c becomes an inner vertex and
+// [c, n] a walked segment.
+func (r *lineRun) constrain(cx, cy, nx, ny, tol float64) {
+	r.tube(cx, cy, tol)
+	r.segment(cx, cy, nx, ny)
+}
+
+// segment restricts the interval to directions the segment [a, b] projects
+// positively onto. The first segment of nonzero length orients the interval;
+// a zero-length one constrains nothing.
+func (r *lineRun) segment(ax, ay, bx, by float64) {
+	dx, dy := bx-ax, by-ay
+	if dx == 0 && dy == 0 {
+		return
+	}
+	if !r.hasRef {
+		r.ref = math.Atan2(dy, dx)
+		r.lo, r.hi = -math.Pi/2, math.Pi/2
+		r.hasRef = true
+		return
+	}
+	c := r.angleTo(r.sx+dx, r.sy+dy)
+	r.lo, r.hi = max(r.lo, c-math.Pi/2), min(r.hi, c+math.Pi/2)
+}
+
+// tube restricts the interval to chords passing within tol of vertex p.
+func (r *lineRun) tube(px, py, tol float64) {
+	ex, ey := px-r.sx, py-r.sy
+	er := math.Sqrt(ex*ex + ey*ey)
+	if er <= tol || !r.hasRef {
+		// Within tol of the start, any direction passes; and without a
+		// reference every vertex so far coincides with the start.
+		return
+	}
+	c, a := r.angleTo(px, py), math.Asin(tol/er)
+	r.lo, r.hi = max(r.lo, c-a), min(r.hi, c+a)
+}
+
+// angleTo returns the direction of (x, y) from the run start, relative to
+// ref and normalized to (-π, π].
+func (r *lineRun) angleTo(x, y float64) float64 {
+	a := math.Atan2(y-r.sy, x-r.sx) - r.ref
+	if a > math.Pi {
+		a -= 2 * math.Pi
+	} else if a <= -math.Pi {
+		a += 2 * math.Pi
+	}
+	return a
 }
 
 // extendsRun checks that every intermediate vertex (mids plus the current

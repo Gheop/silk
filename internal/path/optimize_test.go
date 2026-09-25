@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func opt(t *testing.T, d string, o Options) string {
@@ -290,6 +291,25 @@ func TestCollinearLineMerge(t *testing.T) {
 		if got := opt(t, tc.in, tc.o); got != tc.want {
 			t.Errorf("collinear(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestCollinearLongRun keeps the run test linear: re-checking every vertex
+// per candidate made a 100k-vertex polyline take tens of seconds.
+func TestCollinearLongRun(t *testing.T) {
+	const n = 200000
+	var sb strings.Builder
+	sb.WriteString("M0 0")
+	for range n {
+		sb.WriteString("l1 1")
+	}
+	start := time.Now()
+	got := opt(t, sb.String(), Options{Precision: 3, MergeCollinear: true})
+	if want := "M0 0l2e5 2e5"; got != want {
+		t.Errorf("long run = %.40q, want %q", got, want)
+	}
+	if el := time.Since(start); el > 5*time.Second {
+		t.Errorf("long run took %v: the run test is no longer linear", el)
 	}
 }
 
