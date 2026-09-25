@@ -66,11 +66,6 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
-      - name: Race
-        # The library is called concurrently by servers; one Go version is
-        # enough to catch a data race. Lives here rather than in the test
-        # matrix so the two jobs finish at about the same time.
-        run: go test -race ./...
       - name: Fuzz smoke
         # Both targets share the 20 s budget in parallel: a smoke run, not a
         # campaign, so halving the workers per target costs nothing useful.
@@ -80,8 +75,28 @@ jobs:
           go test -fuzz=FuzzOptimize -fuzztime=20s -run FuzzOptimize . &
           wait %1 && wait %2
 
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Install resvg (fidelity harness renderer)
+        run: sudo sh scripts/ci-install-resvg.sh
+      - name: Race
+        # The library is called concurrently by servers; one Go version is
+        # enough to catch a data race. Its own job keeps every job under a
+        # minute.
+        run: go test -race ./...
+
   image:
-    needs: [test, fuzz]
+    needs: [test, fuzz, race]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
