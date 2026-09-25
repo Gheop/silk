@@ -236,12 +236,17 @@ func TestTinyViewBoxRaisesPrecision(t *testing.T) {
 // BenchmarkOptimizeCorpus runs the whole corpus once per iteration: the
 // closest proxy for service throughput on the real workload distribution.
 func BenchmarkOptimizeCorpus(b *testing.B) {
-	if _, err := os.Stat(corpusDir); err != nil {
+	benchCorpus(b, corpusDir)
+}
+
+// benchCorpus optimizes every SVG under dir once per iteration.
+func benchCorpus(b *testing.B, dir string) {
+	if _, err := os.Stat(dir); err != nil {
 		b.Skip(err)
 	}
 	var files [][]byte
 	var total int64
-	filepath.WalkDir(corpusDir, func(path string, d os.DirEntry, err error) error {
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err == nil && !d.IsDir() && filepath.Ext(path) == ".svg" {
 			if in, rerr := os.ReadFile(path); rerr == nil {
 				files = append(files, in)
@@ -271,15 +276,22 @@ func BenchmarkOptimizeCorpus(b *testing.B) {
 // deliberate change moves the footprint, re-measure with
 // `go test -run xxx -bench BenchmarkOptimizeCorpus -benchtime 1x -benchmem .`
 // and adjust the budgets (reference + ~15% headroom for toolchain drift).
+// raceEnabled is set by race_test.go when the race detector is on: its
+// instrumentation inflates allocations, so the budget below does not apply.
+var raceEnabled bool
+
 func TestAllocationBudget(t *testing.T) {
-	if _, err := os.Stat(corpusDir); err != nil {
-		t.Skipf("corpus not available: %v", err)
+	if raceEnabled {
+		t.Skip("allocation budget is calibrated without the race detector")
 	}
+	// Always the committed corpus: the budget is calibrated on it, whatever
+	// SILK_CORPUS points the other suites at.
+	const budgetCorpus = "testdata/corpus"
 	const (
 		maxAllocs = 178000   // measured 154.6k (go1.26)
 		maxBytes  = 18500000 // measured 16.1MB (go1.26)
 	)
-	res := testing.Benchmark(BenchmarkOptimizeCorpus)
+	res := testing.Benchmark(func(b *testing.B) { benchCorpus(b, budgetCorpus) })
 	if res.N == 0 {
 		t.Skip("benchmark did not run")
 	}

@@ -49,6 +49,11 @@ jobs:
         run: go vet ./...
       - name: Tests
         run: go test ./...
+      - name: Race
+        # The library is called concurrently by servers; one Go version is
+        # enough to catch a data race.
+        if: matrix.go == 'stable'
+        run: go test -race ./...
 
   fuzz:
     runs-on: ubuntu-latest
