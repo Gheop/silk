@@ -61,6 +61,19 @@ func minimizeDecimalAt(b []byte, mark int) []byte {
 	return b
 }
 
+// smallDigits holds "00".."99": a two-digit lookup halves the divisions of
+// decimal formatting.
+const smallDigits = "00010203040506070809" +
+	"10111213141516171819" +
+	"20212223242526272829" +
+	"30313233343536373839" +
+	"40414243444546474849" +
+	"50515253545556575859" +
+	"60616263646566676869" +
+	"70717273747576777879" +
+	"80818283848586878889" +
+	"90919293949596979899"
+
 // pow10i[n] is the smallest n+1-digit integer: digit counting compares
 // against it instead of dividing.
 var pow10i = [...]int64{1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18}
@@ -164,10 +177,20 @@ func appendScaledDecimal(dst []byte, k int64, prec int) []byte {
 	}
 	var buf [20]byte
 	i := len(buf)
-	for k > 0 {
+	// Two digits per division, strconv style: the divide dominates here.
+	for k >= 100 {
+		q := k / 100
+		r := 2 * (k - q*100)
+		i -= 2
+		buf[i], buf[i+1] = smallDigits[r], smallDigits[r+1]
+		k = q
+	}
+	if k >= 10 {
+		i -= 2
+		buf[i], buf[i+1] = smallDigits[2*k], smallDigits[2*k+1]
+	} else {
 		i--
-		buf[i] = byte('0' + k%10)
-		k /= 10
+		buf[i] = byte('0' + k)
 	}
 	digits := buf[i:]
 	if prec == 0 {
