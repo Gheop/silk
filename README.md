@@ -61,8 +61,8 @@ The image is published to two registries. Each release tag `vX.Y.Z`
 publishes `X.Y.Z` and updates `latest`:
 
 ```
-docker pull ghcr.io/gheop/silk:0.6.1
-docker pull registry.gitlab.com/gheop/silk:0.6.1
+docker pull ghcr.io/gheop/silk:0.6.2
+docker pull registry.gitlab.com/gheop/silk:0.6.2
 ```
 
 The image is built from `scratch` and contains only the static binary.
@@ -105,7 +105,7 @@ The container reads stdin and writes stdout. Pass CLI flags after the
 image name:
 
 ```
-docker run -i ghcr.io/gheop/silk:0.6.1 -precision 2 < input.svg > output.svg
+docker run -i ghcr.io/gheop/silk:0.6.2 -precision 2 < input.svg > output.svg
 ```
 
 ## Configuration
@@ -329,6 +329,19 @@ SILK_CORPUS=/path/to/your/svgs go test ./...
 MIT — see [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.6.2 — Faster number handling, byte-identical output (2026-09-25)
+
+- Performance only, output byte-identical on the whole reference corpus:
+  path numbers with a mantissa below 2^53 are parsed in one scan, the
+  encoding-candidate search prunes on a tighter exact lower bound,
+  attribute values are escaped by runs, start tags are rescanned only in
+  the gaps between attributes, and decimal formatting rounds once and
+  emits two digits per division. −17 % instructions on the corpus,
+  −19 % wall time on a 1.5 MiB path, −10 % on icons, −6.5 % on the
+  100-file corpus.
+- README: speed comparison against svgo (about 10× in-process, 14× CLI
+  to CLI on the reference corpus).
 
 ### v0.6.1 — Fewer allocations, fidelity gate in CI, hardened tooling (2026-09-06)
 
