@@ -63,6 +63,18 @@ func (e *emitter) number(v float64, prec int) {
 	e.prevOpen = bytes.IndexByte(t, '.') >= 0 || bytes.IndexByte(t, 'e') >= 0
 }
 
+// grid writes a number the command table already rounded onto the fast
+// decimal path: the same bytes and separator rules as number, without
+// rounding or scanning the text again.
+func (e *emitter) grid(g *gnum, prec int) {
+	if e.prevKind == 'n' && !g.shape.headMinus && !(g.shape.headDot && e.prevOpen) {
+		e.b = append(e.b, ' ')
+	}
+	e.b = appendScaledDecimal(e.b, g.k, prec)
+	e.prevKind = 'n'
+	e.prevOpen = g.shape.hasDot
+}
+
 // AppendNumberList appends vals in minimal form, space-separated. Attribute
 // lists (points, stroke-dasharray) and CSS values do not share path data's
 // separator elision: ".981.49" is two path numbers but one malformed CSS

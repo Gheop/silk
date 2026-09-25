@@ -1,6 +1,10 @@
 package path
 
-import "testing"
+import (
+	"math"
+	"math/rand/v2"
+	"testing"
+)
 
 func TestFormatNumberExact(t *testing.T) {
 	cases := []struct {
@@ -110,5 +114,52 @@ func TestNumInfoMatchesFormat(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The command table rounds each argument once and emits the winner from the
+// grid integer; it must write exactly what formatNumber writes and denote
+// exactly what quantize returns, for every value and precision.
+func TestRoundOnceMatchesFormatAndQuantize(t *testing.T) {
+	rng := rand.New(rand.NewPCG(11, 17))
+	check := func(v float64, prec int) {
+		t.Helper()
+		q, rk := roundOnce(v, prec)
+		if want := quantize(v, prec); q != want && !(math.IsNaN(q) && math.IsNaN(want)) {
+			t.Fatalf("roundOnce(%v,%d).q = %v, quantize = %v", v, prec, q, want)
+		}
+		g := gnum{q: q, rk: rk}
+		if prec >= 0 && prec <= 15 {
+			g.complete(prec)
+		} else {
+			g.state = gSlow
+		}
+		if g.state != gFast {
+			if _, ok := numInfo(v, prec); ok {
+				t.Fatalf("(%v,%d): numInfo fast but table slow", v, prec)
+			}
+			return
+		}
+		got := string(appendScaledDecimal(nil, g.k, prec))
+		if want := string(formatNumber(nil, v, prec)); got != want {
+			t.Fatalf("(%v,%d): table emits %q, formatNumber %q", v, prec, got, want)
+		}
+		if s, _ := numInfo(v, prec); s != g.shape {
+			t.Fatalf("(%v,%d): shape %+v, numInfo %+v", v, prec, g.shape, s)
+		}
+	}
+	for _, v := range []float64{0, math.Copysign(0, -1), .5, -.5, 1e-3, 99999.9995, 1e5, -1e5, 5e-3, 4.9999e-3, 1e300, -1e300, math.Inf(1), math.NaN()} {
+		for prec := -1; prec <= 16; prec++ {
+			check(v, prec)
+		}
+	}
+	for range 2_000_000 {
+		prec := rng.IntN(16)
+		mag := math.Pow(10, rng.Float64()*9-4)
+		v := (rng.Float64()*2 - 1) * mag
+		if rng.IntN(4) == 0 {
+			v = math.Round(v*math.Pow(10, float64(rng.IntN(6)))) / math.Pow(10, float64(rng.IntN(6)))
+		}
+		check(v, prec)
 	}
 }

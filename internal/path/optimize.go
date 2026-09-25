@@ -169,6 +169,7 @@ func tolAt(prec int) float64 {
 type cand struct {
 	op         byte
 	nargs      int8
+	gi         [7]uint8 // per argument, 1-based index into state.nums; 0 = not shared
 	args       [7]float64
 	prec       int   // formatting precision for this candidate's numbers
 	exactMask  uint8 // format arg i exactly regardless of precision
@@ -212,6 +213,25 @@ type state struct {
 
 	candBuf [8]cand // reused candidate storage: one live set at a time
 	scratch [8][]byte
+
+	// nums holds the current command's argument values, each rounded once
+	// and shared by the candidates that carry it (see gnum). Reset by each
+	// command right before it builds its candidates.
+	nums [16]gnum
+	nn   int
+}
+
+// num rounds v into the command's table and returns its 1-based index and
+// the value its text denotes. A full table returns index 0: candidates then
+// round that argument per use, as before the table existed.
+func (st *state) num(v float64, prec int) (uint8, float64) {
+	q, rk := roundOnce(v, prec)
+	if st.nn == len(st.nums) {
+		return 0, q
+	}
+	st.nums[st.nn] = gnum{q: q, rk: rk}
+	st.nn++
+	return uint8(st.nn), q
 }
 
 func (st *state) arenaArgs(n int) []float64 {
@@ -741,34 +761,38 @@ func (st *state) lineTo(x, y float64) {
 	st.flushPending()
 	et := st.endpointFor(x, y)
 	lp := et.withMin(st.dirPrec(et.x-st.ecx, et.y-st.ecy))
-	ql := func(v float64) float64 { return quantize(v, lp) }
 	tl := tolAt(lp)
+	st.nn = 0
+	ix, qx := st.num(et.x, lp)
+	iy, qy := st.num(et.y, lp)
+	idx, qdx := st.num(et.x-st.ecx, lp)
+	idy, qdy := st.num(et.y-st.ecy, lp)
 	cs := st.candBuf[:0]
 	// Eligibility compares quantized values: the second run sees the rounded
 	// output, so deciding on exact inputs would flip choices between runs
 	// and break idempotence. The tolerance is the local one: freezing the
 	// off-axis coordinate must not bend a short segment's direction.
-	hOK := math.Abs(ql(et.y)-st.ecy) <= tl || ql(et.y-st.ecy) == 0
-	vOK := math.Abs(ql(et.x)-st.ecx) <= tl || ql(et.x-st.ecx) == 0
+	hOK := math.Abs(qy-st.ecy) <= tl || qdy == 0
+	vOK := math.Abs(qx-st.ecx) <= tl || qdx == 0
 	if hOK {
 		cs = append(cs,
-			cand{op: 'h', prec: lp, nargs: 1, args: [7]float64{et.x - st.ecx},
-				endX: ql(et.x-st.ecx) + st.ecx, endY: st.ecy},
-			cand{op: 'H', prec: lp, nargs: 1, args: [7]float64{et.x},
-				endX: ql(et.x), endY: st.ecy})
+			cand{op: 'h', prec: lp, nargs: 1, gi: [7]uint8{idx}, args: [7]float64{et.x - st.ecx},
+				endX: qdx + st.ecx, endY: st.ecy},
+			cand{op: 'H', prec: lp, nargs: 1, gi: [7]uint8{ix}, args: [7]float64{et.x},
+				endX: qx, endY: st.ecy})
 	}
 	if vOK {
 		cs = append(cs,
-			cand{op: 'v', prec: lp, nargs: 1, args: [7]float64{et.y - st.ecy},
-				endX: st.ecx, endY: ql(et.y-st.ecy) + st.ecy},
-			cand{op: 'V', prec: lp, nargs: 1, args: [7]float64{et.y},
-				endX: st.ecx, endY: ql(et.y)})
+			cand{op: 'v', prec: lp, nargs: 1, gi: [7]uint8{idy}, args: [7]float64{et.y - st.ecy},
+				endX: st.ecx, endY: qdy + st.ecy},
+			cand{op: 'V', prec: lp, nargs: 1, gi: [7]uint8{iy}, args: [7]float64{et.y},
+				endX: st.ecx, endY: qy})
 	}
 	cs = append(cs,
-		cand{op: 'l', prec: lp, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
-			endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy)},
-		cand{op: 'L', prec: lp, nargs: 2, args: [7]float64{et.x, et.y},
-			endX: ql(et.x), endY: ql(et.y)})
+		cand{op: 'l', prec: lp, nargs: 2, gi: [7]uint8{idx, idy}, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
+			endX: st.ecx + qdx, endY: st.ecy + qdy},
+		cand{op: 'L', prec: lp, nargs: 2, gi: [7]uint8{ix, iy}, args: [7]float64{et.x, et.y},
+			endX: qx, endY: qy})
 	st.choose(cs)
 	st.cx, st.cy = x, y
 	st.prevCubic, st.prevQuad = false, false
@@ -841,26 +865,39 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 		rx, ry := st.reflC()
 		smoothOK = math.Abs(ql(c1x)-rx) <= tl && math.Abs(ql(c1y)-ry) <= tl
 	}
+	st.nn = 0
+	ix, qx := st.num(et.x, lp)
+	iy, qy := st.num(et.y, lp)
+	idx, qdx := st.num(et.x-st.ecx, lp)
+	idy, qdy := st.num(et.y-st.ecy, lp)
+	i2rx, q2rx := st.num(c2relX, lp)
+	i2ry, q2ry := st.num(c2relY, lp)
+	i2ax, q2ax := st.num(c2absX, lp)
+	i2ay, q2ay := st.num(c2absY, lp)
 	cs := st.candBuf[:0]
 	if smoothOK {
 		cs = append(cs,
-			cand{op: 's', prec: lp,
-				nargs: 4, args: [7]float64{c2relX, c2relY, et.x - st.ecx, et.y - st.ecy},
-				endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
-				c2x: st.ecx + ql(c2relX), c2y: st.ecy + ql(c2relY)},
-			cand{op: 'S', prec: lp,
-				nargs: 4, args: [7]float64{c2absX, c2absY, et.x, et.y},
-				endX: ql(et.x), endY: ql(et.y), c2x: ql(c2absX), c2y: ql(c2absY)})
+			cand{op: 's', prec: lp, nargs: 4, gi: [7]uint8{i2rx, i2ry, idx, idy},
+				args: [7]float64{c2relX, c2relY, et.x - st.ecx, et.y - st.ecy},
+				endX: st.ecx + qdx, endY: st.ecy + qdy,
+				c2x: st.ecx + q2rx, c2y: st.ecy + q2ry},
+			cand{op: 'S', prec: lp, nargs: 4, gi: [7]uint8{i2ax, i2ay, ix, iy},
+				args: [7]float64{c2absX, c2absY, et.x, et.y},
+				endX: qx, endY: qy, c2x: q2ax, c2y: q2ay})
 	}
 	if !isSmoothIn {
+		i1rx, _ := st.num(c1relX, lp)
+		i1ry, _ := st.num(c1relY, lp)
+		i1ax, _ := st.num(c1absX, lp)
+		i1ay, _ := st.num(c1absY, lp)
 		cs = append(cs,
-			cand{op: 'c', prec: lp,
-				nargs: 6, args: [7]float64{c1relX, c1relY, c2relX, c2relY, et.x - st.ecx, et.y - st.ecy},
-				endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
-				c2x: st.ecx + ql(c2relX), c2y: st.ecy + ql(c2relY)},
-			cand{op: 'C', prec: lp,
-				nargs: 6, args: [7]float64{c1absX, c1absY, c2absX, c2absY, et.x, et.y},
-				endX: ql(et.x), endY: ql(et.y), c2x: ql(c2absX), c2y: ql(c2absY)})
+			cand{op: 'c', prec: lp, nargs: 6, gi: [7]uint8{i1rx, i1ry, i2rx, i2ry, idx, idy},
+				args: [7]float64{c1relX, c1relY, c2relX, c2relY, et.x - st.ecx, et.y - st.ecy},
+				endX: st.ecx + qdx, endY: st.ecy + qdy,
+				c2x: st.ecx + q2rx, c2y: st.ecy + q2ry},
+			cand{op: 'C', prec: lp, nargs: 6, gi: [7]uint8{i1ax, i1ay, i2ax, i2ay, ix, iy},
+				args: [7]float64{c1absX, c1absY, c2absX, c2absY, et.x, et.y},
+				endX: qx, endY: qy, c2x: q2ax, c2y: q2ay})
 	}
 	// A cubic whose two quadratic pullbacks agree is an elevated quadratic:
 	// the same curve within the rounding budget, two arguments fewer. A
@@ -893,21 +930,27 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 			if st.prevQuad {
 				rx, ry = 2*st.ecx-st.eqcx, 2*st.ecy-st.eqcy
 			}
-			if math.Abs(ql(cqx)-rx) <= tl && math.Abs(ql(cqy)-ry) <= tl {
+			iqax, qqax := st.num(cqx, lp)
+			iqay, qqay := st.num(cqy, lp)
+			iqrx, qqrx := st.num(cqx-st.ecx, lp)
+			iqry, qqry := st.num(cqy-st.ecy, lp)
+			if math.Abs(qqax-rx) <= tl && math.Abs(qqay-ry) <= tl {
 				cs = append(cs,
-					cand{op: 't', prec: lp, nargs: 2, args: [7]float64{et.x - st.ecx, et.y - st.ecy},
-						endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy), qcx: rx, qcy: ry},
-					cand{op: 'T', prec: lp, nargs: 2, args: [7]float64{et.x, et.y},
-						endX: ql(et.x), endY: ql(et.y), qcx: rx, qcy: ry})
+					cand{op: 't', prec: lp, nargs: 2, gi: [7]uint8{idx, idy},
+						args: [7]float64{et.x - st.ecx, et.y - st.ecy},
+						endX: st.ecx + qdx, endY: st.ecy + qdy, qcx: rx, qcy: ry},
+					cand{op: 'T', prec: lp, nargs: 2, gi: [7]uint8{ix, iy},
+						args: [7]float64{et.x, et.y},
+						endX: qx, endY: qy, qcx: rx, qcy: ry})
 			}
 			cs = append(cs,
-				cand{op: 'q', prec: lp,
-					nargs: 4, args: [7]float64{cqx - st.ecx, cqy - st.ecy, et.x - st.ecx, et.y - st.ecy},
-					endX: st.ecx + ql(et.x-st.ecx), endY: st.ecy + ql(et.y-st.ecy),
-					qcx: st.ecx + ql(cqx-st.ecx), qcy: st.ecy + ql(cqy-st.ecy)},
-				cand{op: 'Q', prec: lp,
-					nargs: 4, args: [7]float64{cqx, cqy, et.x, et.y},
-					endX: ql(et.x), endY: ql(et.y), qcx: ql(cqx), qcy: ql(cqy)})
+				cand{op: 'q', prec: lp, nargs: 4, gi: [7]uint8{iqrx, iqry, idx, idy},
+					args: [7]float64{cqx - st.ecx, cqy - st.ecy, et.x - st.ecx, et.y - st.ecy},
+					endX: st.ecx + qdx, endY: st.ecy + qdy,
+					qcx: st.ecx + qqrx, qcy: st.ecy + qqry},
+				cand{op: 'Q', prec: lp, nargs: 4, gi: [7]uint8{iqax, iqay, ix, iy},
+					args: [7]float64{cqx, cqy, et.x, et.y},
+					endX: qx, endY: qy, qcx: qqax, qcy: qqay})
 		}
 	}
 	win := st.choose(cs)
@@ -1073,11 +1116,15 @@ func (st *state) flushPending() {
 	if st.prec >= 0 && st.pendingMin > lp {
 		lp = min(st.pendingMin, 12)
 	}
-	ql := func(v float64) float64 { return quantize(v, lp) }
+	st.nn = 0
+	ix, qx := st.num(x, lp)
+	iy, qy := st.num(y, lp)
+	idx, qdx := st.num(x-st.ecx, lp)
+	idy, qdy := st.num(y-st.ecy, lp)
 	win := st.choose([]cand{
-		{op: 'M', prec: lp, nargs: 2, args: [7]float64{x, y}, endX: ql(x), endY: ql(y)},
-		{op: 'm', prec: lp, nargs: 2, args: [7]float64{x - st.ecx, y - st.ecy},
-			endX: st.ecx + ql(x-st.ecx), endY: st.ecy + ql(y-st.ecy)},
+		{op: 'M', prec: lp, nargs: 2, gi: [7]uint8{ix, iy}, args: [7]float64{x, y}, endX: qx, endY: qy},
+		{op: 'm', prec: lp, nargs: 2, gi: [7]uint8{idx, idy}, args: [7]float64{x - st.ecx, y - st.ecy},
+			endX: st.ecx + qdx, endY: st.ecy + qdy},
 	})
 	st.esx, st.esy = win.endX, win.endY
 }
@@ -1144,7 +1191,17 @@ func (st *state) candLen(c *cand) (n int, lastKind byte, lastOpen bool, ok bool)
 		if c.exactMask&(1<<i) != 0 {
 			return 0, 0, false, false
 		}
-		s, fast := numInfo(c.args[i], c.prec)
+		var s numShape
+		var fast bool
+		if gi := c.gi[i]; gi != 0 {
+			g := &st.nums[gi-1]
+			if g.state == gRounded {
+				g.complete(c.prec)
+			}
+			s, fast = g.shape, g.state == gFast
+		} else {
+			s, fast = numInfo(c.args[i], c.prec)
+		}
 		if !fast {
 			return 0, 0, false, false
 		}
@@ -1182,7 +1239,7 @@ func (st *state) choose(cs []cand) *cand {
 			continue
 		}
 		e := emitter{b: st.scratch[i][:0], numBuf: st.e.numBuf, prevKind: st.e.prevKind, prevOpen: st.e.prevOpen}
-		encodeCand(&e, st.implicit, &cs[i], cs[i].prec)
+		encodeCand(&e, st.implicit, &cs[i], cs[i].prec, &st.nums)
 		st.scratch[i] = e.b
 		st.e.numBuf = e.numBuf
 		if len(e.b) < bestLen {
@@ -1197,7 +1254,7 @@ func (st *state) choose(cs []cand) *cand {
 	} else {
 		// candLen and the encoder agree by construction; either way the
 		// emitter state left by encodeCand is the authority.
-		encodeCand(&st.e, st.implicit, &cs[best], cs[best].prec)
+		encodeCand(&st.e, st.implicit, &cs[best], cs[best].prec, &st.nums)
 	}
 	w := &cs[best]
 	st.implicit = nextImplicit(w.op)
@@ -1220,14 +1277,18 @@ func (st *state) denoted(c *cand) Cmd {
 	for i := range int(c.nargs) {
 		v := c.args[i]
 		if c.exactMask&(1<<i) == 0 && !(arc && (i == 3 || i == 4)) {
-			v = quantize(v, c.prec)
+			if gi := c.gi[i]; gi != 0 {
+				v = st.nums[gi-1].q
+			} else {
+				v = quantize(v, c.prec)
+			}
 		}
 		out.Args[i] = v
 	}
 	return out
 }
 
-func encodeCand(e *emitter, implicit byte, c *cand, prec int) {
+func encodeCand(e *emitter, implicit byte, c *cand, prec int, nums *[16]gnum) {
 	if c.op != implicit || c.nargs == 0 {
 		e.letter(c.op)
 	}
@@ -1238,6 +1299,16 @@ func encodeCand(e *emitter, implicit byte, c *cand, prec int) {
 			e.flag(v)
 		case c.exactMask&(1<<i) != 0:
 			e.number(v, -1)
+		case c.gi[i] != 0:
+			g := &nums[c.gi[i]-1]
+			if g.state == gRounded {
+				g.complete(prec)
+			}
+			if g.state == gFast {
+				e.grid(g, prec) // already rounded: write the grid integer
+				continue
+			}
+			e.number(v, prec)
 		default:
 			e.number(v, prec)
 		}

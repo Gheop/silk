@@ -110,32 +110,110 @@ type numShape struct {
 }
 
 func numInfo(v float64, prec int) (numShape, bool) {
-	if prec < 0 || prec > 15 {
+	_, k, fast := gridOf(v, prec)
+	if !fast {
 		return numShape{}, false
+	}
+	return shapeOf(k, prec), true
+}
+
+// gnum is one number rounded once: the value its text denotes and, on the
+// fast decimal path, the integer on the 10^-prec grid and the exact shape
+// formatNumber would emit. The candidate encodings of one command share
+// these instead of rounding the same coordinate once per candidate and then
+// again to measure it, emit it and track what it denotes.
+type gnum struct {
+	q  float64 // quantize(v, prec): what the text denotes
+	rk float64 // the grid integer as a float, from the same single rounding; NaN off-grid
+	// Completed on first measurement only: most arguments are pruned before.
+	k     int64
+	shape numShape
+	state uint8 // gRounded, gFast or gSlow
+}
+
+const (
+	gRounded = iota // q and rk only
+	gFast           // k and shape valid: text = appendScaledDecimal(k, prec)
+	gSlow           // formatNumber must really format
+)
+
+// roundOnce is quantize, also returning the grid integer the rounding went
+// through (NaN when there is no grid: exact precision or overflow).
+func roundOnce(v float64, prec int) (q, rk float64) {
+	if prec < 0 || prec > 15 {
+		return v, math.NaN()
+	}
+	p := pow10[prec]
+	rk = math.Round(v * p)
+	r := rk / p
+	if math.IsInf(r, 0) || math.IsNaN(r) {
+		return v, math.NaN()
+	}
+	if r == 0 {
+		return 0, 0 // formatNumber emits "0" for negative zero too
+	}
+	return r, rk
+}
+
+// complete finishes g the way gridOf would have, from its stored rounding.
+func (g *gnum) complete(prec int) {
+	if math.IsNaN(g.rk) {
+		g.state = gSlow
+		return
+	}
+	if g.q == 0 {
+		g.k, g.shape, g.state = 0, numShape{length: 1}, gFast
+		return
+	}
+	p := pow10[prec]
+	abs := math.Abs(g.q)
+	if abs < 1e-2 || abs >= 1e5 || abs*p >= 9e15 {
+		g.state = gSlow
+		return
+	}
+	if g.rk < 2e15 && g.rk > -2e15 {
+		g.k = int64(g.rk)
+	} else {
+		g.k = int64(math.Round(g.q * p))
+	}
+	g.shape, g.state = shapeOf(g.k, prec), gFast
+}
+
+// gridOf rounds v once to prec decimals and returns what the text denotes
+// (quantize's result) and, when formatNumber takes its fast decimal path,
+// the integer k with text = appendScaledDecimal(k, prec).
+func gridOf(v float64, prec int) (q float64, k int64, fast bool) {
+	if prec < 0 || prec > 15 {
+		return v, 0, false
 	}
 	p := pow10[prec]
 	vp := v * p
 	rk := math.Round(vp) // the grid integer, as a float
 	r := rk / p
 	if math.IsInf(r, 0) || math.IsNaN(r) {
-		return numShape{}, false
+		return v, 0, false
 	}
 	if r == 0 {
-		return numShape{length: 1}, true // "0"
+		return 0, 0, true // "0", also for -0
 	}
 	abs := math.Abs(r)
 	if abs < 1e-2 || abs >= 1e5 || abs*p >= 9e15 {
-		return numShape{}, false
+		return r, 0, false
 	}
 	// r is rk/p; multiplying back rounds once more, and for |rk| below
 	// 2^51 that double rounding stays under half a unit, so the integer is
 	// rk itself and the second Round is skipped. Larger magnitudes keep the
 	// exact two-step form formatNumber uses.
-	var k int64
 	if rk < 2e15 && rk > -2e15 {
-		k = int64(rk)
-	} else {
-		k = int64(math.Round(r * p))
+		return r, int64(rk), true
+	}
+	return r, int64(math.Round(r * p)), true
+}
+
+// shapeOf describes appendScaledDecimal(k, prec) without formatting it.
+func shapeOf(k int64, prec int) numShape {
+	if k == 0 {
+		return numShape{length: 1}
 	}
 	neg := k < 0
 	if neg {
@@ -174,7 +252,7 @@ func numInfo(v float64, prec int) (numShape, bool) {
 		n += 1 + (prec - nd) + (nd - tz)
 	}
 	s.length = n
-	return s, true
+	return s
 }
 
 // appendScaledDecimal formats k/10^prec in minimal decimal form.
