@@ -158,6 +158,12 @@ func blockedAttr(name, value string) bool {
 	if strings.HasPrefix(name, "marker") || name == "pathLength" || name == "style" {
 		return true
 	}
+	// Whatever their syntax (url(), inset(), blur()...), these resolve
+	// against the element's own bounding box or identity.
+	switch name {
+	case "clip-path", "mask", "filter", "transform-origin":
+		return true
+	}
 	// Bounding-box-relative units make gradients, patterns, clips and masks
 	// resolve differently against the merged geometry.
 	return strings.Contains(value, "url(")

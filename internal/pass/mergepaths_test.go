@@ -97,3 +97,12 @@ func TestMergePathsKeepsPathsWithChildren(t *testing.T) {
 		}
 	}
 }
+
+func TestMergePathsKeepsBBoxRelativeCSS(t *testing.T) {
+	// clip-path: inset() and friends are relative to the element's own
+	// bounding box even without a url() reference.
+	in := `<svg><path clip-path="inset(0 50% 0 0)" d="M0 0h1"/><path clip-path="inset(0 50% 0 0)" d="M9 0h1"/></svg>`
+	if got := runMerge(t, in); got != in {
+		t.Errorf("inset-clipped paths merged:\n got: %q\nwant: %q", got, in)
+	}
+}
