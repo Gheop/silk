@@ -23,11 +23,24 @@ type Refs struct {
 	// HasUse is set when any <use> exists: a subtree can then be re-rendered
 	// under different inherited properties.
 	HasUse bool
+
+	// HasScript is set when a <script> element or an event handler
+	// attribute (onclick, onload...) exists: code can address any element
+	// by id, read attributes and restructure the tree, so structural passes
+	// are disabled like under a stylesheet.
+	HasScript bool
+}
+
+// Dynamic reports that something outside the markup (a stylesheet, a
+// script) can re-target or restyle arbitrary elements: passes that remove,
+// merge or restructure elements must stand down.
+func (r *Refs) Dynamic() bool {
+	return r.HasStylesheet || r.HasScript
 }
 
 // UsedID reports whether the id may be referenced from anywhere.
 func (r *Refs) UsedID(id string) bool {
-	return r.HasStylesheet || r.ids[id]
+	return r.Dynamic() || r.ids[id]
 }
 
 // ConcretelyUsedID reports whether the id is actually referenced (by url(),
@@ -69,9 +82,14 @@ func Analyze(doc *dom.Node) *Refs {
 			}
 		case "use":
 			r.HasUse = true
+		case "script":
+			r.HasScript = true
 		}
 		for i := range n.Attrs {
 			a := &n.Attrs[i]
+			if strings.HasPrefix(a.Name, "on") {
+				r.HasScript = true
+			}
 			// The value is scanned even when it did not decode cleanly: an
 			// opaque value must still pin whatever it might reference.
 			v, _ := a.Value()

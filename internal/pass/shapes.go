@@ -14,17 +14,7 @@ import (
 // stylesheet or script can address elements by type name, so either disables
 // the pass; geometry with units or percentages stays as authored.
 func ConvertShapes(doc *dom.Node, refs *Refs) {
-	if refs.HasStylesheet {
-		return
-	}
-	hasScript := false
-	doc.Walk(func(n *dom.Node) bool {
-		if n.Kind == dom.KindElement && localName(n.Name) == "script" {
-			hasScript = true
-		}
-		return !hasScript
-	})
-	if hasScript {
+	if refs.Dynamic() {
 		return
 	}
 	doc.Walk(func(n *dom.Node) bool {

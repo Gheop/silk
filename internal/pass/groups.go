@@ -26,7 +26,7 @@ var pushableAttrs = map[string]bool{
 // child. Anything a stylesheet could target, anything referenced, and any
 // group carrying clipping, masking, filtering, or inline CSS is left alone.
 func CollapseGroups(doc *dom.Node, refs *Refs) {
-	if refs.HasStylesheet {
+	if refs.Dynamic() {
 		return
 	}
 	// Unwrapping is decided bottom-up and applied per parent by rebuilding

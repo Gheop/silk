@@ -15,7 +15,7 @@ import (
 // show the difference: opaque fill, nonzero winding, no stroke. Otherwise
 // the bounding boxes — inflated by the stroke reach — must be disjoint.
 func MergePaths(doc *dom.Node, refs *Refs, prec int, cache *PathCache) {
-	if refs.HasStylesheet {
+	if refs.Dynamic() {
 		return
 	}
 	m := merger{refs: refs, prec: prec, docSafe: noopSafeDoc(doc), cache: cache}

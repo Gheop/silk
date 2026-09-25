@@ -78,3 +78,27 @@ func TestAnalyzeTrimsHref(t *testing.T) {
 		t.Error("href with surrounding whitespace not collected")
 	}
 }
+
+func TestScriptFreezesStructure(t *testing.T) {
+	// Code can address any element by id and read any attribute, so a
+	// script or an event handler disables defs pruning, group collapsing,
+	// path merging and style-to-attribute rewriting alike.
+	for _, in := range []string{
+		`<svg><script>1</script><defs><g id="x"><path d="M0 0h1"/></g></defs><g><path class="k" style="fill:red" d="M0 0h1"/></g><path class="k" style="fill:red" d="M5 0h1"/></svg>`,
+		`<svg onload="go()"><defs><g id="x"><path d="M0 0h1"/></g></defs><g><path class="k" style="fill:red" d="M0 0h1"/></g><path class="k" style="fill:red" d="M5 0h1"/></svg>`,
+	} {
+		doc := parse(t, in)
+		refs := Analyze(doc)
+		if !refs.HasScript {
+			t.Fatalf("HasScript not set for %q", in)
+		}
+		Cleanup(doc, refs)
+		OptimizePresentation(doc, refs, 3)
+		CollapseGroups(doc, refs)
+		ConvertShapes(doc, refs)
+		MergePaths(doc, refs, 3, NewPathCache())
+		if got := string(dom.Serialize(doc)); got != in {
+			t.Errorf("structure changed under a script:\n got: %q\nwant: %q", got, in)
+		}
+	}
+}

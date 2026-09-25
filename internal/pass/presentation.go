@@ -279,7 +279,7 @@ func optimizeStyleAttr(n *dom.Node, refs *Refs, prec int) {
 		// A declaration is only removable when nothing it outranks could
 		// resurface: a stylesheet rule (any prop, style attr wins over it) or
 		// a different-valued presentation attribute on this same element.
-		if !refs.HasStylesheet && !declMasksAttr(n, d.prop, d.val) &&
+		if !refs.Dynamic() && !declMasksAttr(n, d.prop, d.val) &&
 			!inPinnedFamily(d.prop) &&
 			isDroppableDefault(n, refs, d.prop, strings.ToLower(d.val)) {
 			continue
@@ -287,7 +287,7 @@ func optimizeStyleAttr(n *dom.Node, refs *Refs, prec int) {
 		// Inline style outranks stylesheet rules; a presentation attribute
 		// does not. Without a stylesheet they are equivalent, and the
 		// attribute form is shorter.
-		if !refs.HasStylesheet && presentationProps[d.prop] && !inPinnedFamily(d.prop) {
+		if !refs.Dynamic() && presentationProps[d.prop] && !inPinnedFamily(d.prop) {
 			n.SetAttr(d.prop, d.val)
 			continue
 		}

@@ -178,8 +178,9 @@ var disposableDefs = map[string]bool{
 func removeUnreferencedDefs(doc *dom.Node, refs *Refs) {
 	// Content rendered through <use> matches CSS in its original tree
 	// position, so structural selectors (+, :first-child) can depend on
-	// unreferenced siblings inside defs. A stylesheet freezes them all.
-	if refs.HasStylesheet {
+	// unreferenced siblings inside defs. A stylesheet freezes them all, and
+	// so does a script (getElementById).
+	if refs.Dynamic() {
 		return
 	}
 	doc.Walk(func(n *dom.Node) bool {
@@ -575,7 +576,7 @@ func emptyContainer(n *dom.Node, refs *Refs) bool {
 	if id, ok := n.AttrValue("id"); ok && refs.UsedID(id) {
 		return false
 	}
-	if refs.HasStylesheet {
+	if refs.Dynamic() {
 		return false
 	}
 	// A filter can paint even over empty content (e.g. feFlood with an
