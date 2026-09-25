@@ -61,8 +61,8 @@ The image is published to two registries. Each release tag `vX.Y.Z`
 publishes `X.Y.Z` and updates `latest`:
 
 ```
-docker pull ghcr.io/gheop/silk:0.7.0
-docker pull registry.gitlab.com/gheop/silk:0.7.0
+docker pull ghcr.io/gheop/silk:0.7.1
+docker pull registry.gitlab.com/gheop/silk:0.7.1
 ```
 
 The image is built from `scratch` and contains only the static binary.
@@ -105,7 +105,7 @@ The container reads stdin and writes stdout. Pass CLI flags after the
 image name:
 
 ```
-docker run -i ghcr.io/gheop/silk:0.7.0 -precision 2 < input.svg > output.svg
+docker run -i ghcr.io/gheop/silk:0.7.1 -precision 2 < input.svg > output.svg
 ```
 
 ## Configuration
@@ -344,6 +344,17 @@ SILK_CORPUS=/path/to/your/svgs go test ./...
 MIT — see [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.7.1 — Faster path emission, byte-identical output (2026-09-25)
+
+- Performance only, output byte-identical on the reference corpus and on
+  a 17,008-file stress corpus: each path argument is rounded once per
+  command, and the winning encoding is written straight from that
+  rounding instead of being rounded again to emit it and to track it.
+  −6.9 % instructions; wall time −8.3 % on a 1.5 MiB path and −4.7 % on
+  the 100-file corpus.
+- The arc conversion code is split into small functions (no behaviour
+  change), and its per-run buffer is reused.
 
 ### v0.7.0 — Rendering guards from a full audit, hostile-input bounds, browser fidelity check (2026-09-25)
 
