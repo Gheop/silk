@@ -58,7 +58,9 @@ func Optimize(svg []byte, opts Options) ([]byte, error) {
 	if opts.Multipass {
 		bound = 8
 		if opts.MaxPasses > 0 {
-			bound = opts.MaxPasses
+			// A round may grow before the next shrinks again; the loop is
+			// bounded by this cap whatever the caller asks for.
+			bound = min(opts.MaxPasses, 64)
 		}
 	}
 	cache := pass.NewPathCache()
