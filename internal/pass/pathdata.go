@@ -6,6 +6,7 @@ package pass
 import (
 	"math"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -203,6 +204,20 @@ func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear b
 func scaleBump(n *dom.Node) (int, bool) {
 	s := 1.0
 	for e := n; e != nil && e.Kind == dom.KindElement; e = e.Parent {
+		// A CSS transform in inline style is a scale this scan does not
+		// parse: no bound.
+		if v, ok := e.AttrValue("style"); e.HasAttr("style") && (!ok || strings.Contains(v, "transform")) {
+			return 0, false
+		}
+		// A nested viewport maps its viewBox onto its width/height; the
+		// root's scale is handled by the document-level precision.
+		if localName(e.Name) == "svg" && e.Parent != nil && e.Parent.Kind == dom.KindElement && e.HasAttr("viewBox") {
+			f, ok := viewportScale(e)
+			if !ok {
+				return 0, false
+			}
+			s *= f
+		}
 		if !e.HasAttr("transform") {
 			continue
 		}
@@ -394,4 +409,29 @@ func noopSafeElement(n *dom.Node) bool {
 		}
 	}
 	return true
+}
+
+// viewportScale returns the larger of width/viewBox-width and
+// height/viewBox-height for a nested svg with a viewBox. Percentages, units
+// or a missing size leave the scale unknown.
+func viewportScale(e *dom.Node) (float64, bool) {
+	vb, ok := e.AttrValue("viewBox")
+	if !ok {
+		return 0, false
+	}
+	f := strings.FieldsFunc(strings.TrimSpace(vb), func(r rune) bool { return r == ' ' || r == ',' || r == '\t' || r == '\n' })
+	if len(f) != 4 {
+		return 0, false
+	}
+	vw, err1 := strconv.ParseFloat(f[2], 64)
+	vh, err2 := strconv.ParseFloat(f[3], 64)
+	if err1 != nil || err2 != nil || vw <= 0 || vh <= 0 {
+		return 0, false
+	}
+	w, ok1 := shapeNum(e, "width")
+	h, ok2 := shapeNum(e, "height")
+	if !ok1 || !ok2 || !e.HasAttr("width") || !e.HasAttr("height") || w <= 0 || h <= 0 {
+		return 0, false
+	}
+	return max(w/vw, h/vh), true
 }

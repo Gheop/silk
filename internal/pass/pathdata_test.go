@@ -53,3 +53,21 @@ func TestScaledSubtreesKeepPrecision(t *testing.T) {
 		t.Errorf("scaled path rounded at base precision: %q", out)
 	}
 }
+
+func TestScaleBumpSeesNestedViewports(t *testing.T) {
+	// A nested svg mapping a 1-unit viewBox onto 1000 px amplifies a
+	// coordinate rounding a thousandfold: the precision follows.
+	in := `<svg width="1000" height="1000"><svg viewBox="0 0 1 1" width="1000" height="1000"><path d="M.12345 .12345L.5 .5"/></svg></svg>`
+	doc := parse(t, in)
+	OptimizePaths(doc, 3, NewPathCache())
+	if got := string(dom.Serialize(doc)); !strings.Contains(got, ".12345") {
+		t.Errorf("coordinates rounded inside a magnifying nested viewport: %q", got)
+	}
+	// A CSS transform is a scale the scan cannot parse: exact.
+	in = `<svg><g style="transform:scale(1000)"><path d="M.12345 .12345L.5 .5"/></g></svg>`
+	doc = parse(t, in)
+	OptimizePaths(doc, 3, NewPathCache())
+	if got := string(dom.Serialize(doc)); !strings.Contains(got, ".12345") {
+		t.Errorf("coordinates rounded under an inline CSS transform: %q", got)
+	}
+}
