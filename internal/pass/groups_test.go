@@ -84,3 +84,12 @@ func TestCollapseKeepsTransformOffOriginCarriers(t *testing.T) {
 		t.Errorf("transform pushed onto transform-origin carrier:\n got: %q", got)
 	}
 }
+
+func TestCollapseGroupsKeepsGroupInClipPath(t *testing.T) {
+	// A <g> inside <clipPath> is ignored by renderers (the clip is empty);
+	// unwrapping its shapes would make the clip visible.
+	in := `<svg><clipPath id="c"><g><path d="M0 0h1v1z"/></g></clipPath><path clip-path="url(#c)" d="M0 0h9v9z"/></svg>`
+	if got := runGroups(t, in); got != in {
+		t.Errorf("group in clipPath collapsed:\n got: %q\nwant: %q", got, in)
+	}
+}

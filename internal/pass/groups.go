@@ -50,6 +50,11 @@ func collapseGroup(g *dom.Node, refs *Refs) bool {
 	if g.HasAttr("id") {
 		return false // even unreferenced: dropping ids is not this pass's call
 	}
+	// clipPath admits only shapes, text and use: renderers ignore a <g>
+	// there, so unwrapping it would turn an empty clip into a visible one.
+	if localName(g.Parent.Name) == "clipPath" {
+		return false
+	}
 	if len(g.Attrs) == 0 {
 		g.ReplaceWithChildren()
 		return true
