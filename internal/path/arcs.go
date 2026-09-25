@@ -24,6 +24,14 @@ func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
 	if tol <= 0 {
 		return cs
 	}
+	// Without the stroke-safe tube the budget is tol = tolAt/2 while the
+	// stability probe moves an endpoint by 2√2·tolAt along the chord, which
+	// shifts the reconstructed centre by at least half of that: no run can
+	// pass, and trying costs O(n²) per rejected group (a 5000-cubic stroked
+	// circle took 18 s for zero arcs).
+	if !strokeSafe {
+		return cs
+	}
 	hasCubic := false
 	for i := range cs {
 		if op := cs[i].Op | 0x20; op == 'c' || op == 's' {
@@ -123,6 +131,7 @@ func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
 			continue
 		}
 		group := []arcSeg{{x, y, c2x, c2y, delta}}
+		sweep := delta
 		// Extend over following cubics on the same circle, walking a
 		// shadow of the tracked state.
 		gx, gy := x, y
@@ -139,9 +148,10 @@ func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
 			d1x, d1y, d2x, d2y, nx, ny := cubicAbs(j)
 			cx, cy, pc2x, pc2y, prevCubic = sc, ss, spc, spq, wasCubic
 			d, ok := onCircle(fit, gx, gy, d1x, d1y, d2x, d2y, nx, ny, tol, strokeSafe)
-			if !ok || sweepOf(group)+d > 3.8*math.Pi {
+			if !ok || sweep+d > 3.8*math.Pi {
 				break
 			}
+			sweep += d
 			group = append(group, arcSeg{nx, ny, d2x, d2y, d})
 			gx, gy, gc2x, gc2y = nx, ny, d2x, d2y
 			j++

@@ -1,9 +1,11 @@
 package path
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConvertArcsCircle(t *testing.T) {
@@ -109,5 +111,34 @@ func TestConvertArcsTrimsSmoothChain(t *testing.T) {
 	}
 	if i := strings.IndexAny(got, "aA"); i >= 0 && !strings.ContainsAny(got[i:], "cC") {
 		t.Errorf("C C C S S: no literal cubic kept between the arc and the smooth chain: %q", got)
+	}
+}
+
+func TestConvertArcsStrokedRunIsCheap(t *testing.T) {
+	// A stroked circle of thousands of kappa cubics can never pass the
+	// stability probe; it must be skipped, not retried per cubic.
+	const n = 4000
+	var sb strings.Builder
+	r := 1e5
+	fmt.Fprintf(&sb, "M%.12f %.12f", r, 0.0)
+	k := 4.0 / 3 * math.Tan(math.Pi/(2*n))
+	for i := range n {
+		a0, a1 := 2*math.Pi*float64(i)/n, 2*math.Pi*float64(i+1)/n
+		p0x, p0y := r*math.Cos(a0), r*math.Sin(a0)
+		p3x, p3y := r*math.Cos(a1), r*math.Sin(a1)
+		fmt.Fprintf(&sb, "C%.12f %.12f %.12f %.12f %.12f %.12f",
+			p0x-k*r*math.Sin(a0), p0y+k*r*math.Cos(a0), p3x+k*r*math.Sin(a1), p3y-k*r*math.Cos(a1), p3x, p3y)
+	}
+	start := time.Now()
+	cs, err := Parse([]byte(sb.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := convertArcs(cs, tolAt(3)/2, 3, false)
+	if el := time.Since(start); el > 2*time.Second {
+		t.Errorf("stroked run took %v", el)
+	}
+	if len(out) != len(cs) {
+		t.Errorf("stroked run converted %d commands", len(cs)-len(out))
 	}
 }
