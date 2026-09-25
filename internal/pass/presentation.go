@@ -97,19 +97,23 @@ var geoAttrs = map[string][]string{
 }
 
 // numericRoundProps are presentation properties whose values are plain
-// numbers (or number lists) safe to round and minify. stroke-dasharray and
-// stroke-width are deliberately absent: a dasharray rounding error
-// accumulates by the repeat count along the stroke, and a stroke-width
-// error is amplified without bound by miter joins at needle-sharp corners
-// (miter length is width/sin(θ/2)) — both are reformatted exactly instead.
+// numbers (or number lists) safe to round and minify. stroke-dasharray,
+// stroke-width and stroke-miterlimit are deliberately absent: a dasharray
+// rounding error accumulates by the repeat count along the stroke, a
+// stroke-width error is amplified without bound by miter joins at
+// needle-sharp corners (miter length is width/sin(θ/2)), and miterlimit is
+// a threshold, not a quantity: rounding 1.9996 to 2 flips a bevel into a
+// miter spike at a 60° corner. All three are reformatted exactly instead.
 var numericRoundProps = map[string]bool{
-	"stroke-dashoffset": true, "stroke-miterlimit": true,
-	"opacity": true, "fill-opacity": true,
+	"stroke-dashoffset": true,
+	"opacity":           true, "fill-opacity": true,
 	"stroke-opacity": true, "stop-opacity": true, "flood-opacity": true,
 }
 
 // exactNumericProps are reformatted at exact precision, never rounded.
-var exactNumericProps = [...]string{"stroke-dasharray", "stroke-width"}
+var exactNumericProps = map[string]bool{
+	"stroke-dasharray": true, "stroke-width": true, "stroke-miterlimit": true,
+}
 
 // OptimizePresentation rewrites styling to its shortest equivalent form:
 // inline styles become presentation attributes (shorter, and only when no
@@ -141,7 +145,7 @@ func OptimizePresentation(doc *dom.Node, refs *Refs, prec int) {
 		for name := range numericRoundProps {
 			roundAttr(n, name, prec)
 		}
-		for _, name := range exactNumericProps {
+		for name := range exactNumericProps {
 			if name == "stroke-dasharray" && dasharrayHasNegative(n) {
 				// A negative value (even -0) makes the whole list invalid
 				// and the stroke renders solid; normalizing the sign away
@@ -259,15 +263,15 @@ func optimizeStyleAttr(n *dom.Node, refs *Refs, prec int) {
 		if colorProps[d.prop] {
 			d.val = shortestColor(d.val)
 		}
-		if numericRoundProps[d.prop] || d.prop == "stroke-dasharray" || d.prop == "stroke-width" {
+		if numericRoundProps[d.prop] || exactNumericProps[d.prop] {
 			p := prec
-			if d.prop == "stroke-dasharray" || d.prop == "stroke-width" {
+			if exactNumericProps[d.prop] {
 				p = -1
 			}
 			// A negative dasharray value (even -0) invalidates the list and
 			// the stroke renders solid; rewriting the sign away would turn
 			// the dashes on.
-			negDash := d.prop == "stroke-dasharray" && strings.Contains(" "+d.val, " -")
+			negDash := d.prop == "stroke-dasharray" && dasharrayValueHasNegative(d.val)
 			if s, ok := minifyNumbers(d.val, p); ok && !negDash && len(s) <= len(d.val) {
 				d.val = s
 			}
@@ -526,9 +530,12 @@ func parseColor(s string) (uint32, bool) {
 // equal to zero but whose spelling carries the sign some parsers reject.
 func dasharrayHasNegative(n *dom.Node) bool {
 	v, ok := n.AttrValue("stroke-dasharray")
-	if !ok {
-		return false
-	}
+	return ok && dasharrayValueHasNegative(v)
+}
+
+// dasharrayValueHasNegative reports a negative entry (even -0) in a dash
+// list, whichever separator the list uses.
+func dasharrayValueHasNegative(v string) bool {
 	for _, f := range strings.FieldsFunc(v, func(r rune) bool {
 		return r == ' ' || r == ',' || r == '\t' || r == '\n' || r == '\r'
 	}) {

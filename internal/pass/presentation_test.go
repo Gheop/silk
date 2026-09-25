@@ -264,3 +264,23 @@ func TestNegativeDasharrayUntouched(t *testing.T) {
 		t.Errorf("negative dasharray rewritten: %q", got)
 	}
 }
+
+func TestMiterlimitAndNegativeDashStayExact(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// stroke-miterlimit is a threshold: 1.9996 rounded to 2 turns the
+		// bevel at a 60° corner into a miter spike.
+		{`<svg><path stroke-miterlimit="1.9996" d="M0 0"/></svg>`,
+			`<svg><path stroke-miterlimit="1.9996" d="M0 0"/></svg>`},
+		{`<svg><path style="stroke-miterlimit:1.9996" d="M0 0"/></svg>`,
+			`<svg><path d="M0 0" stroke-miterlimit="1.9996"/></svg>`},
+		// A comma-separated negative entry invalidates the list (solid
+		// stroke) exactly like a space-separated one: never normalized.
+		{`<svg><path style="stroke-dasharray:1,-0,3,4" d="M0 0"/></svg>`,
+			`<svg><path d="M0 0" stroke-dasharray="1,-0,3,4"/></svg>`},
+	}
+	for _, tc := range cases {
+		if got := runPresentation(t, tc.in, 3); got != tc.want {
+			t.Errorf("presentation(%q)\n got: %q\nwant: %q", tc.in, got, tc.want)
+		}
+	}
+}
