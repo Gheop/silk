@@ -233,6 +233,9 @@ func scaleBump(n *dom.Node) (int, bool) {
 // styles (stroke-dasharray inherits).
 func dashSafeElement(n *dom.Node) bool {
 	for e := n; e != nil && e.Kind == dom.KindElement; e = e.Parent {
+		if animatesProp(e, func(p string) bool { return p == "stroke-dasharray" }) {
+			return false
+		}
 		for i := range e.Attrs {
 			a := &e.Attrs[i]
 			switch a.Name {
@@ -254,6 +257,9 @@ func dashSafeElement(n *dom.Node) bool {
 // merging collinear vertices only ever shows through markers.
 func markerSafeElement(n *dom.Node) bool {
 	for e := n; e != nil && e.Kind == dom.KindElement; e = e.Parent {
+		if animatesProp(e, func(p string) bool { return strings.HasPrefix(p, "marker") }) {
+			return false
+		}
 		for i := range e.Attrs {
 			a := &e.Attrs[i]
 			switch a.Name {
@@ -310,14 +316,16 @@ func underSwitch(n *dom.Node) bool {
 
 // noopSafeDoc reports whether zero-length segments can be dropped anywhere in
 // the document. A stylesheet could set stroke or markers through selectors we
-// do not resolve, and <use> can re-render a path under different inherited
-// properties, so either disables removal wholesale.
+// do not resolve, <use> can re-render a path under different inherited
+// properties, and an animation can turn a stroke on later, so any of them
+// disables removal wholesale.
 func noopSafeDoc(doc *dom.Node) bool {
 	safe := true
 	doc.Walk(func(n *dom.Node) bool {
 		switch {
 		case n.Kind == dom.KindElement && localName(n.Name) == "style",
 			n.Kind == dom.KindElement && localName(n.Name) == "use",
+			n.Kind == dom.KindElement && animationElements[localName(n.Name)],
 			n.Kind == dom.KindProcInst && n.Name == "xml-stylesheet":
 			safe = false
 			return false
@@ -325,6 +333,21 @@ func noopSafeDoc(doc *dom.Node) bool {
 		return safe
 	})
 	return safe
+}
+
+// animatesProp reports whether a SMIL child of e animates a property the
+// predicate accepts. Animations target their parent unless they carry an
+// href; the href form is rare enough to leave to the document-wide gates.
+func animatesProp(e *dom.Node, accept func(string) bool) bool {
+	for _, c := range e.Children {
+		if c.Kind != dom.KindElement || !animationElements[localName(c.Name)] || c.HasAttr("href") || c.HasAttr("xlink:href") {
+			continue
+		}
+		if v, ok := c.AttrValue("attributeName"); !ok || accept(strings.TrimSpace(v)) {
+			return true
+		}
+	}
+	return false
 }
 
 // underFilter reports whether a filter applies to the element or any of its

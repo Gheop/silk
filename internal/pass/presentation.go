@@ -386,8 +386,9 @@ func isDroppableDefault(n *dom.Node, refs *Refs, prop, val string) bool {
 	if !inheritedProps[prop] {
 		return true
 	}
-	// The default was possibly masking an inherited value.
-	if refs.HasStylesheet || refs.HasUse {
+	// The default was possibly masking an inherited value, now or once an
+	// animation sets one on an ancestor.
+	if refs.HasStylesheet || refs.HasUse || refs.HasAnimation {
 		return false
 	}
 	for e := n.Parent; e != nil && e.Kind == dom.KindElement; e = e.Parent {

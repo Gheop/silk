@@ -1,6 +1,7 @@
 package pass
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Gheop/silk/internal/dom"
@@ -100,5 +101,40 @@ func TestScriptFreezesStructure(t *testing.T) {
 		if got := string(dom.Serialize(doc)); got != in {
 			t.Errorf("structure changed under a script:\n got: %q\nwant: %q", got, in)
 		}
+	}
+}
+
+func TestAnimationReferencesAndGuards(t *testing.T) {
+	// Animated hrefs reference every value in turn.
+	doc := parse(t, `<svg><defs><g id="a"/><g id="b"/></defs><use href="#a"><animate attributeName="href" values="#a;#b"/></use></svg>`)
+	refs := Analyze(doc)
+	if !refs.HasAnimation || !refs.UsedID("b") {
+		t.Errorf("animated href value not collected: animation=%v b=%v", refs.HasAnimation, refs.UsedID("b"))
+	}
+	Cleanup(doc, refs)
+	if got, want := string(dom.Serialize(doc)), `<svg><defs><g id="a"/><g id="b"/></defs><use href="#a"><animate attributeName="href" values="#a;#b"/></use></svg>`; got != want {
+		t.Errorf("animated target pruned:\n got: %q\nwant: %q", got, want)
+	}
+	// A stroke animated on later shows zero-length segments with round
+	// caps: they must survive, as must a default that masks an animated
+	// inherited value.
+	in := `<svg><g fill="red"><animate attributeName="fill" to="blue"/><path fill="black" d="M0 0h1"/></g><path stroke="none" stroke-linecap="round" stroke-width="10" d="M10 10L10 10M20 20L30 30"><animate attributeName="stroke" to="red"/></path></svg>`
+	doc = parse(t, in)
+	refs = Analyze(doc)
+	OptimizePresentation(doc, refs, 3)
+	OptimizePaths(doc, 3, NewPathCache())
+	got := string(dom.Serialize(doc))
+	if !strings.Contains(got, `fill="#000"`) && !strings.Contains(got, `fill="black"`) {
+		t.Errorf("default masking an animated inherited fill dropped: %q", got)
+	}
+	if !strings.Contains(got, "M10 10") {
+		t.Errorf("zero-length segment under a stroke animation dropped: %q", got)
+	}
+	// A marker animated on a path pins its coordinates exactly.
+	in = `<svg><path d="M0 0L10 .00041234L10 0"><animate attributeName="marker-end" to="url(#m)"/></path><marker id="m"/></svg>`
+	doc = parse(t, in)
+	OptimizePaths(doc, 3, NewPathCache())
+	if got := string(dom.Serialize(doc)); !strings.Contains(got, ".00041234") {
+		t.Errorf("coordinates rounded under an animated marker: %q", got)
 	}
 }

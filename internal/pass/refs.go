@@ -29,6 +29,18 @@ type Refs struct {
 	// by id, read attributes and restructure the tree, so structural passes
 	// are disabled like under a stylesheet.
 	HasScript bool
+
+	// HasAnimation is set when a SMIL animation element exists: attribute
+	// values then change over time, so anything decided from a static
+	// value (a stroke of none, an inherited default) may not hold.
+	HasAnimation bool
+}
+
+// animationElements are the SMIL elements whose attributes carry values
+// (possibly id references) that only apply over time.
+var animationElements = map[string]bool{
+	"animate": true, "set": true, "animateTransform": true,
+	"animateMotion": true, "animateColor": true,
 }
 
 // Dynamic reports that something outside the markup (a stylesheet, a
@@ -85,10 +97,27 @@ func Analyze(doc *dom.Node) *Refs {
 		case "script":
 			r.HasScript = true
 		}
+		animation := animationElements[localName(n.Name)]
+		if animation {
+			r.HasAnimation = true
+		}
 		for i := range n.Attrs {
 			a := &n.Attrs[i]
 			if strings.HasPrefix(a.Name, "on") {
 				r.HasScript = true
+			}
+			if animation {
+				// An animated href or paint takes each of its values in
+				// turn: every #id token is a reference.
+				switch a.Name {
+				case "from", "to", "by", "values":
+					v, _ := a.Value()
+					for _, tok := range strings.FieldsFunc(v, func(c rune) bool { return c == ';' || c == ' ' || c == '\t' || c == '\n' }) {
+						if len(tok) > 1 && tok[0] == '#' {
+							r.ids[tok[1:]] = true
+						}
+					}
+				}
 			}
 			// The value is scanned even when it did not decode cleanly: an
 			// opaque value must still pin whatever it might reference.
