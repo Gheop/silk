@@ -49,16 +49,30 @@ jobs:
         run: go vet ./...
       - name: Tests
         run: go test ./...
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
       - name: Fuzz smoke
         # Both targets share the 20 s budget in parallel: a smoke run, not a
         # campaign, so halving the workers per target costs nothing useful.
+        # Fuzzing is randomized, so one Go version is as good as two.
         run: |
           go test -fuzz=FuzzParse -fuzztime=20s -run FuzzParse ./internal/path/ &
           go test -fuzz=FuzzOptimize -fuzztime=20s -run FuzzOptimize . &
           wait %1 && wait %2
 
   image:
-    needs: test
+    needs: [test, fuzz]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
