@@ -4,11 +4,29 @@ on:
   push:
     branches: [master]
     tags: ['v*']
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'docs/**'
+
+# Jobs opt into the permissions they need; nothing is granted by default.
+permissions: {}
+
+# A newer push to the same branch supersedes the running one; master and
+# tags always run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     strategy:
@@ -18,6 +36,8 @@ jobs:
         go: ['1.25', 'stable']
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
@@ -29,26 +49,51 @@ jobs:
         run: go vet ./...
       - name: Tests
         run: go test ./...
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
       - name: Fuzz smoke
+        # Both targets share the 20 s budget in parallel: a smoke run, not a
+        # campaign, so halving the workers per target costs nothing useful.
+        # Fuzzing is randomized, so one Go version is as good as two.
         run: |
-          go test -fuzz=FuzzParse -fuzztime=20s -run FuzzParse ./internal/path/
-          go test -fuzz=FuzzOptimize -fuzztime=20s -run FuzzOptimize .
+          go test -fuzz=FuzzParse -fuzztime=20s -run FuzzParse ./internal/path/ &
+          go test -fuzz=FuzzOptimize -fuzztime=20s -run FuzzOptimize . &
+          wait %1 && wait %2
 
   image:
-    needs: test
+    needs: [test, fuzz]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Log in to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
       - name: Build and push
+        env:
+          OWNER: ${{ github.repository_owner }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          IMAGE=ghcr.io/${{ github.repository_owner }}/silk
+          IMAGE=ghcr.io/$OWNER/silk
           IMAGE=${IMAGE,,}
           docker build -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
           docker push "$IMAGE:$VERSION"
