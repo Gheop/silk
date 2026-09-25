@@ -324,6 +324,12 @@ func TestSemanticCorpus(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Optimize: %v", err)
 			}
+			if again, err := Optimize(in, opts); err != nil || !bytes.Equal(out, again) {
+				t.Error("not deterministic")
+			}
+			if twice, err := Optimize(out, opts); err != nil || !bytes.Equal(out, twice) {
+				t.Errorf("not idempotent: %v", err)
+			}
 			t.Run("resvg", func(t *testing.T) { fidelity.Compare(t, filepath.Base(f), in, out) })
 			t.Run("chrome", func(t *testing.T) { fidelity.CompareChrome(t, filepath.Base(f), in, out) })
 		})

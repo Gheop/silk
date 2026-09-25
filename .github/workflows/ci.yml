@@ -53,11 +53,6 @@ jobs:
         env:
           SILK_REQUIRE_CHROME: 1
         run: go test ./...
-      - name: Race
-        # The library is called concurrently by servers; one Go version is
-        # enough to catch a data race.
-        if: matrix.go == 'stable'
-        run: go test -race ./...
 
   fuzz:
     runs-on: ubuntu-latest
@@ -71,6 +66,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
+      - name: Race
+        # The library is called concurrently by servers; one Go version is
+        # enough to catch a data race. Lives here rather than in the test
+        # matrix so the two jobs finish at about the same time.
+        run: go test -race ./...
       - name: Fuzz smoke
         # Both targets share the 20 s budget in parallel: a smoke run, not a
         # campaign, so halving the workers per target costs nothing useful.
