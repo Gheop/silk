@@ -54,6 +54,20 @@ func (r Result) Acceptable() bool {
 		float64(r.StrongPixels) <= maxStrongFrac*float64(r.TotalPixels)
 }
 
+// maxBadFracBrowser is the soft-pixel budget for a browser render. Skia
+// anti-aliases a stroked <rect> and the same shape written as a <path>
+// differently along the whole perimeter (measured: 30/255 on 0.7 % of a
+// 512² canvas for one frame, 2 % on the busiest W3C test page), so the
+// browser pass tolerates more sub-64/255 shifts. Its strong-pixel gate,
+// which is what catches geometry and semantics, is the same as resvg's.
+const maxBadFracBrowser = 0.03
+
+// AcceptableBrowser is Acceptable with the browser soft-pixel budget.
+func (r Result) AcceptableBrowser() bool {
+	return float64(r.StrongPixels) <= maxStrongFrac*float64(r.TotalPixels) &&
+		float64(r.BadPixels) <= maxBadFracBrowser*float64(r.TotalPixels)
+}
+
 func (r Result) String() string {
 	return fmt.Sprintf("maxDiff=%d badPixels=%d strongPixels=%d total=%d",
 		r.MaxDiff, r.BadPixels, r.StrongPixels, r.TotalPixels)
@@ -270,7 +284,7 @@ func Compare(t *testing.T, name string, original, optimized []byte) {
 	if ResvgPath() == "" {
 		t.Skip("resvg not installed; skipping fidelity check")
 	}
-	compareWith(t, Resvg, "resvg", name, original, optimized)
+	compareWith(t, Resvg, "resvg", name, original, optimized, Result.Acceptable)
 }
 
 // CompareChrome is Compare through a headless Chrome. It skips when none is
@@ -283,17 +297,17 @@ func CompareChrome(t *testing.T, name string, original, optimized []byte) {
 		}
 		t.Skip("chrome not installed; skipping browser fidelity check")
 	}
-	compareWith(t, Chrome, "chrome", name, original, optimized)
+	compareWith(t, Chrome, "chrome", name, original, optimized, Result.AcceptableBrowser)
 }
 
-func compareWith(t *testing.T, render Renderer, renderer, name string, original, optimized []byte) {
+func compareWith(t *testing.T, render Renderer, renderer, name string, original, optimized []byte, ok func(Result) bool) {
 	t.Helper()
 	res, err := RenderDiffWith(render, t.TempDir(), original, optimized)
 	if err != nil {
 		t.Errorf("%s: %v", name, err)
 		return
 	}
-	if !res.Acceptable() {
+	if !ok(res) {
 		t.Errorf("%s: %s render differs: %s", name, renderer, res)
 	}
 }

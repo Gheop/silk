@@ -72,6 +72,11 @@ func TestCorpus(t *testing.T) {
 					i, out[lo:min(len(out), i+30)], twice[lo:min(len(twice), i+30)])
 			}
 			fidelity.Compare(t, filepath.Base(f), in, out)
+			// The browser pass over the whole corpus takes minutes: opt-in,
+			// run nightly rather than on every push.
+			if os.Getenv("SILK_CHROME_CORPUS") != "" {
+				fidelity.CompareChrome(t, filepath.Base(f), in, out)
+			}
 		})
 	}
 }

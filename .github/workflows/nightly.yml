@@ -1,0 +1,31 @@
+name: nightly
+
+# The browser fidelity pass over the whole committed corpus: too slow for
+# every push, cheap once a day. It catches what resvg cannot show.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  browser-corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Install resvg (fidelity harness renderer)
+        run: sudo sh scripts/ci-install-resvg.sh
+      - name: Corpus through resvg and Chrome
+        env:
+          SILK_REQUIRE_CHROME: 1
+          SILK_CHROME_CORPUS: 1
+        run: go test -run 'TestCorpus|TestSemanticCorpus' -timeout 25m .

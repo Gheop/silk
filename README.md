@@ -283,7 +283,11 @@ corpus built around behaviours where a browser and resvg disagree or that
 resvg does not exercise: markers on basic shapes, a `<g>` inside
 `<clipPath>`, CSS `clip-path: inset()`, threshold properties such as
 `stroke-miterlimit`, nested viewports. Each file is checked with both
-renderers; the browser is the reference. Behaviours no rasterizer can show
+renderers; the browser is the reference. The browser pass keeps the same
+strong-pixel gate and allows more sub-64/255 shifts, because Skia
+anti-aliases a stroked `<rect>` and the same shape as a `<path>`
+differently along the whole perimeter. A nightly workflow runs the browser
+over the whole committed corpus. Behaviours no rasterizer can show
 (animations, scripts, sprite sheets, titles) are covered by unit tests on
 the passes instead.
 
