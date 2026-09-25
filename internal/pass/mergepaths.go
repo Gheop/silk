@@ -11,16 +11,15 @@ import (
 
 // MergePaths joins adjacent <path> siblings that share every attribute and
 // provably paint independently. Merging reorders painting (all fill, then
-// all stroke, in one element), so overlap is only tolerated when nothing can
-// show the difference: opaque fill, nonzero winding, no stroke. Otherwise
-// the bounding boxes — inflated by the stroke reach — must be disjoint.
+// all stroke, in one element) and joins windings, so the bounding boxes,
+// inflated by the stroke reach, must be disjoint.
 func MergePaths(doc *dom.Node, refs *Refs, prec int, cache *PathCache) {
 	if refs.Dynamic() {
 		return
 	}
 	m := merger{refs: refs, prec: prec, docSafe: noopSafeDoc(doc), cache: cache}
 	doc.Walk(func(n *dom.Node) bool {
-		if n.Kind != dom.KindElement && n.Kind != dom.KindDocument {
+		if n.Kind != dom.KindElement {
 			return true
 		}
 		m.mergeChildren(n)

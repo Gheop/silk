@@ -372,9 +372,9 @@ var charDataFreeElements = func() map[string]bool {
 // nothing: re-declarations of a prefix already in scope with the same URI
 // (some generators stamp one on every element), and declarations of prefixes
 // no name in the document uses. SMIL attributeName/attributeType values can
-// smuggle a prefix into an attribute value, so they count as uses; a
-// stylesheet's @namespace rules can bind element selectors to any declared
-// URI, so unused-prefix removal backs off entirely when one is present.
+// smuggle a prefix into an attribute value, so they count as uses. Unused
+// prefixes are only ever dropped when no script and no DTD internal subset
+// could be using them (see below); a stylesheet does not matter.
 func removeRedundantNamespaces(doc *dom.Node, refs *Refs) {
 	used := map[string]bool{}
 	opaque := false

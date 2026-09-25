@@ -10,8 +10,8 @@ type arcFit struct {
 
 // arcSeg records one converted cubic: its endpoint and sweep contribution.
 type arcSeg struct {
-	ex, ey, c2x, c2y float64
-	delta            float64
+	ex, ey float64
+	delta  float64
 }
 
 // convertArcs replaces runs of at least two consecutive cubics that trace a
@@ -130,7 +130,7 @@ func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
 			i++
 			continue
 		}
-		group := []arcSeg{{x, y, c2x, c2y, delta}}
+		group := []arcSeg{{x, y, delta}}
 		sweep := delta
 		// Extend over following cubics on the same circle, walking a
 		// shadow of the tracked state.
@@ -152,7 +152,7 @@ func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
 				break
 			}
 			sweep += d
-			group = append(group, arcSeg{nx, ny, d2x, d2y, d})
+			group = append(group, arcSeg{nx, ny, d})
 			gx, gy, gc2x, gc2y = nx, ny, d2x, d2y
 			j++
 		}
@@ -212,13 +212,10 @@ func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
 				if !ok || math.Hypot(rcx-fit.cx, rcy-fit.cy)+math.Abs(rr-fit.r) > tube {
 					return false
 				}
-				if eps == 0 {
-					break
-				}
 			}
 			return true
 		}
-		emit := func(k int, segs []arcSeg) {
+		emit := func(segs []arcSeg) {
 			s := sweepOf(segs)
 			last := segs[len(segs)-1]
 			laf, sf := 0.0, 0.0
@@ -257,7 +254,7 @@ func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
 			}
 		}
 		for _, sp := range spans {
-			emit(sp[0], group[sp[0]:sp[1]])
+			emit(group[sp[0]:sp[1]])
 		}
 		last := group[len(group)-1]
 		cx, cy = last.ex, last.ey

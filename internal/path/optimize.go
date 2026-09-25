@@ -192,7 +192,6 @@ type state struct {
 	esx, esy   float64 // emitted subpath start
 	ec2x, ec2y float64 // emitted second control of the previous cubic
 	eqcx, eqcy float64 // emitted control of the previous quadratic
-	pqcx, pqcy float64 // exact control of the previous quadratic
 
 	prevCubic, prevQuad bool
 
@@ -712,16 +711,6 @@ func (st *state) refCur() (float64, float64) {
 	return st.ecx, st.ecy
 }
 
-// near reports whether every coordinate pair is within tolerance of (x, y).
-func near(tol, x, y float64, pts ...float64) bool {
-	for i := 0; i < len(pts); i += 2 {
-		if math.Abs(pts[i]-x) > tol || math.Abs(pts[i+1]-y) > tol {
-			return false
-		}
-	}
-	return true
-}
-
 // dropNoop drops a command whose every consumer-visible point collapses onto
 // the current point. pts are the absolute exact points of the command.
 func (st *state) dropNoop(endX, endY float64, pts ...float64) bool {
@@ -926,7 +915,6 @@ func (st *state) cubicTo(c1x, c1y, c2x, c2y, x, y float64, isSmoothIn bool) {
 	st.open = true
 	if isQuad && (win.op|0x20 == 'q' || win.op|0x20 == 't') {
 		st.eqcx, st.eqcy = win.qcx, win.qcy
-		st.pqcx, st.pqcy = cqx, cqy
 		st.prevCubic, st.prevQuad = false, true
 		return
 	}
@@ -994,7 +982,6 @@ func (st *state) quadTo(qx, qy, x, y float64, isSmoothIn bool) {
 	}
 	win := st.choose(cs)
 	st.eqcx, st.eqcy = win.qcx, win.qcy
-	st.pqcx, st.pqcy = qx, qy
 	st.cx, st.cy = x, y
 	st.prevCubic, st.prevQuad = false, true
 	st.open = true
@@ -1208,13 +1195,9 @@ func (st *state) choose(cs []cand) *cand {
 		st.e.b = append(st.e.b, st.scratch[bestEncoded]...)
 		st.e.prevKind, st.e.prevOpen = bestKind, bestOpen
 	} else {
-		mark := len(st.e.b)
+		// candLen and the encoder agree by construction; either way the
+		// emitter state left by encodeCand is the authority.
 		encodeCand(&st.e, st.implicit, &cs[best], cs[best].prec)
-		if len(st.e.b)-mark != bestLen || st.e.prevKind != bestKind || st.e.prevOpen != bestOpen {
-			// candLen and the real encoder disagree: impossible by
-			// construction, but the encoder is the authority.
-			bestKind, bestOpen = st.e.prevKind, st.e.prevOpen
-		}
 	}
 	w := &cs[best]
 	st.implicit = nextImplicit(w.op)
