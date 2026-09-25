@@ -84,3 +84,16 @@ func TestMergePathsKeepsMarkerCarriers(t *testing.T) {
 		t.Errorf("marker paths merged:\n got: %q\nwant: %q", got, in)
 	}
 }
+
+func TestMergePathsKeepsPathsWithChildren(t *testing.T) {
+	// A title or an animation belongs to its own path: merging would drop
+	// the absorbed path's children and animate geometry that was static.
+	for _, in := range []string{
+		`<svg><path fill="red" d="M0 0h1"><animate attributeName="fill" to="blue"/></path><path fill="red" d="M9 0h1"/></svg>`,
+		`<svg><path d="M0 0h1"><title>one</title></path><path d="M9 0h1"><title>two</title></path></svg>`,
+	} {
+		if got := runMerge(t, in); got != in {
+			t.Errorf("paths with children merged:\n got: %q\nwant: %q", got, in)
+		}
+	}
+}

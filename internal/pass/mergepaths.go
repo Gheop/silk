@@ -81,6 +81,11 @@ func (m *merger) canMerge(a, b *dom.Node, acc *bbox) (bool, *bbox, string) {
 	if a.HasAttr("id") || b.HasAttr("id") {
 		return false, nil, ""
 	}
+	// Children (title, desc, animations) belong to one path: joining would
+	// drop the absorbed ones and extend an animation over new geometry.
+	if len(a.Children) > 0 || len(b.Children) > 0 {
+		return false, nil, ""
+	}
 	// marker-start/end render at the ends of the whole path, not of each
 	// subpath: joining two marker-carrying paths silently deletes the
 	// markers at the seam even when every attribute matches.
