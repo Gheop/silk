@@ -77,7 +77,8 @@ func Analyze(doc *dom.Node) *Refs {
 			v, _ := a.Value()
 			switch a.Name {
 			case "href", "xlink:href":
-				if len(v) > 1 && v[0] == '#' {
+				// URLs resolve after whitespace trimming.
+				if v := strings.TrimSpace(v); len(v) > 1 && v[0] == '#' {
 					r.ids[v[1:]] = true
 				}
 			case "aria-labelledby", "aria-describedby":

@@ -70,3 +70,11 @@ func TestStylesheetNonASCIIIDReference(t *testing.T) {
 		t.Fatalf("non-ASCII id referenced from stylesheet not seen as used")
 	}
 }
+
+func TestAnalyzeTrimsHref(t *testing.T) {
+	// Browsers trim the URL before resolving the fragment.
+	doc := parse(t, `<svg><use href=" #s "/></svg>`)
+	if !Analyze(doc).UsedID("s") {
+		t.Error("href with surrounding whitespace not collected")
+	}
+}
