@@ -4,7 +4,7 @@ stages: [test, release]
 # suite on a second runner for releases and publishes the GitLab image.
 test:
   stage: test
-  image: golang:1.26
+  image: golang:1.26@sha256:6c2a5538f964f1c82f97ad14988bf05de100d922d159d0e398b54c7b0ca0c6c9
   timeout: 15m
   interruptible: true
   rules:
@@ -17,8 +17,8 @@ test:
 
 release-image:
   stage: release
-  image: docker:27
-  services: [docker:27-dind]
+  image: docker:27@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
+  services: [docker:27-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce]
   timeout: 15m
   rules:
     - if: $CI_COMMIT_TAG =~ /^v/
