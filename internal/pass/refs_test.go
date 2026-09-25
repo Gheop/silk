@@ -122,7 +122,7 @@ func TestAnimationReferencesAndGuards(t *testing.T) {
 	doc = parse(t, in)
 	refs = Analyze(doc)
 	OptimizePresentation(doc, refs, 3)
-	OptimizePaths(doc, 3, NewPathCache())
+	OptimizePaths(doc, Analyze(doc), 3, NewPathCache())
 	got := string(dom.Serialize(doc))
 	if !strings.Contains(got, `fill="#000"`) && !strings.Contains(got, `fill="black"`) {
 		t.Errorf("default masking an animated inherited fill dropped: %q", got)
@@ -133,7 +133,7 @@ func TestAnimationReferencesAndGuards(t *testing.T) {
 	// A marker animated on a path pins its coordinates exactly.
 	in = `<svg><path d="M0 0L10 .00041234L10 0"><animate attributeName="marker-end" to="url(#m)"/></path><marker id="m"/></svg>`
 	doc = parse(t, in)
-	OptimizePaths(doc, 3, NewPathCache())
+	OptimizePaths(doc, Analyze(doc), 3, NewPathCache())
 	if got := string(dom.Serialize(doc)); !strings.Contains(got, ".00041234") {
 		t.Errorf("coordinates rounded under an animated marker: %q", got)
 	}

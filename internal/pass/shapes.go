@@ -25,7 +25,7 @@ func ConvertShapes(doc *dom.Node, refs *Refs) {
 		case "line":
 			convertLine(n)
 		case "rect":
-			convertRect(n)
+			convertRect(n, refs)
 		case "polyline":
 			convertPoly(n, false)
 		case "polygon":
@@ -78,13 +78,13 @@ func convertLine(n *dom.Node) {
 	becomePath(n, d, "x1", "y1", "x2", "y2")
 }
 
-func convertRect(n *dom.Node) {
+func convertRect(n *dom.Node, refs *Refs) {
 	if n.HasAttr("rx") || n.HasAttr("ry") {
 		return // rounded corners need arcs; out of scope
 	}
 	// Browsers draw markers on path, line, polyline and polygon only: a
 	// rect under a marker property would grow markers once converted.
-	if !markerSafeElement(n) {
+	if !markerSafeElement(refs, n) {
 		return
 	}
 	x, ok1 := shapeNum(n, "x")

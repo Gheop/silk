@@ -34,6 +34,24 @@ type Refs struct {
 	// values then change over time, so anything decided from a static
 	// value (a stroke of none, an inherited default) may not hold.
 	HasAnimation bool
+
+	// animated maps an element to the attribute names its own SMIL
+	// children animate (an animation without href targets its parent).
+	// Computed once here: scanning children on demand was quadratic on a
+	// parent with tens of thousands of shapes.
+	animated map[*dom.Node][]string
+}
+
+// Animates reports whether a SMIL child of e animates a property the
+// predicate accepts. The href form (animating another element) is rare
+// enough to leave to the document-wide gates.
+func (r *Refs) Animates(e *dom.Node, accept func(string) bool) bool {
+	for _, p := range r.animated[e] {
+		if accept(p) {
+			return true
+		}
+	}
+	return false
 }
 
 // animationElements are the SMIL elements whose attributes carry values
@@ -100,6 +118,15 @@ func Analyze(doc *dom.Node) *Refs {
 		animation := animationElements[localName(n.Name)]
 		if animation {
 			r.HasAnimation = true
+			if n.Parent != nil && !n.HasAttr("href") && !n.HasAttr("xlink:href") {
+				if r.animated == nil {
+					r.animated = map[*dom.Node][]string{}
+				}
+				// A missing attributeName animates nothing nameable; record
+				// it as "" so every predicate can still refuse it.
+				v, _ := n.AttrValue("attributeName")
+				r.animated[n.Parent] = append(r.animated[n.Parent], strings.TrimSpace(v))
+			}
 		}
 		for i := range n.Attrs {
 			a := &n.Attrs[i]

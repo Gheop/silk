@@ -88,7 +88,7 @@ func (m *merger) canMerge(a, b *dom.Node, acc *bbox) (bool, *bbox, string) {
 	// marker-start/end render at the ends of the whole path, not of each
 	// subpath: joining two marker-carrying paths silently deletes the
 	// markers at the seam even when every attribute matches.
-	if !markerSafeElement(a) || !markerSafeElement(b) {
+	if !markerSafeElement(m.refs, a) || !markerSafeElement(m.refs, b) {
 		return false, nil, ""
 	}
 	if !sameAttrsExceptD(a, b) {
@@ -103,8 +103,8 @@ func (m *merger) canMerge(a, b *dom.Node, acc *bbox) (bool, *bbox, string) {
 	if !ok {
 		return false, nil, ""
 	}
-	pA, noopsA, colA := pathOptions(a, m.prec, m.docSafe)
-	pB, noopsB, colB := pathOptions(b, m.prec, m.docSafe)
+	pA, noopsA, colA := pathOptions(m.refs, a, m.prec, m.docSafe)
+	pB, noopsB, colB := pathOptions(m.refs, b, m.prec, m.docSafe)
 	ba := acc
 	if ba == nil {
 		if box, bok := m.cache.emittedBBox(da, pA, noopsA, colA); bok {

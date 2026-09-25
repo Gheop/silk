@@ -102,7 +102,7 @@ func (c *PathCache) store(key pathCacheKey, v pathCacheVal) {
 // PrewarmPaths fills the cache for every path in the document concurrently.
 // Results are deterministic — each entry is a pure function of its key — so
 // only wall-clock time changes.
-func PrewarmPaths(doc *dom.Node, prec int, cache *PathCache) {
+func PrewarmPaths(doc *dom.Node, refs *Refs, prec int, cache *PathCache) {
 	docSafe := noopSafeDoc(doc)
 	type job struct {
 		d         string
@@ -120,7 +120,7 @@ func PrewarmPaths(doc *dom.Node, prec int, cache *PathCache) {
 		if !ok {
 			return true
 		}
-		p, noops, collinear := pathOptions(n, prec, docSafe)
+		p, noops, collinear := pathOptions(refs, n, prec, docSafe)
 		key := pathCacheKey{d, p, noops, collinear}
 		if !seen[key] {
 			seen[key] = true
@@ -161,7 +161,7 @@ var pathDataElements = map[string]bool{
 }
 
 // pathOptions resolves the effective options for one path element.
-func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear bool) {
+func pathOptions(refs *Refs, n *dom.Node, prec int, docSafe bool) (p int, noops, collinear bool) {
 	if localName(n.Name) != "path" {
 		return prec, false, false
 	}
@@ -172,28 +172,28 @@ func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear b
 		}
 		prec = min(prec+bump, 8)
 	}
-	if !markerSafeElement(n) {
+	if !markerSafeElement(refs, n) {
 		// An orient="auto" marker takes its rotation from vertex tangents,
 		// whose length can be smaller than the rounding residual of the
 		// shared vertex: no finite precision bounds the rotation, so paths
 		// that concretely carry markers keep exact coordinates.
 		return -1, false, false
 	}
-	if !dashSafeElement(n) && prec >= 0 {
+	if !dashSafeElement(refs, n) && prec >= 0 {
 		// A dash pattern integrates the whole path length: per-segment
 		// length errors accumulate along the stroke by the segment count.
 		// Two extra decimals keep the accumulated phase error below a
 		// fraction of a period on paths thousands of segments long.
 		prec = min(prec+2, 10)
 	}
-	if underFilter(n) || !dashSafeElement(n) {
+	if underFilter(n) || !dashSafeElement(refs, n) {
 		// A filter's primitives sample relative to the geometry, so segment
 		// removal and vertex merging (which can change the tight bbox) stay
 		// off; plain coordinate rounding measures within tolerance even
 		// through feTurbulence on the corpus. The same holds for dashes.
 		return prec, false, false
 	}
-	return prec, docSafe && noopSafeElement(n), docSafe && markerSafeElement(n)
+	return prec, docSafe && noopSafeElement(n), docSafe && markerSafeElement(refs, n)
 }
 
 // scaleBump returns the extra decimals the element's cumulative transform
@@ -246,9 +246,9 @@ func scaleBump(n *dom.Node) (int, bool) {
 // dashSafeElement reports whether the element provably carries no dash
 // pattern, looking at its own and its ancestors' attributes and inline
 // styles (stroke-dasharray inherits).
-func dashSafeElement(n *dom.Node) bool {
+func dashSafeElement(refs *Refs, n *dom.Node) bool {
 	for e := n; e != nil && e.Kind == dom.KindElement; e = e.Parent {
-		if animatesProp(e, func(p string) bool { return p == "stroke-dasharray" }) {
+		if refs.Animates(e, func(p string) bool { return p == "stroke-dasharray" }) {
 			return false
 		}
 		for i := range e.Attrs {
@@ -270,9 +270,9 @@ func dashSafeElement(n *dom.Node) bool {
 
 // markerSafeElement reports whether the element provably carries no markers:
 // merging collinear vertices only ever shows through markers.
-func markerSafeElement(n *dom.Node) bool {
+func markerSafeElement(refs *Refs, n *dom.Node) bool {
 	for e := n; e != nil && e.Kind == dom.KindElement; e = e.Parent {
-		if animatesProp(e, func(p string) bool { return strings.HasPrefix(p, "marker") }) {
+		if refs.Animates(e, func(p string) bool { return strings.HasPrefix(p, "marker") }) {
 			return false
 		}
 		for i := range e.Attrs {
@@ -292,7 +292,7 @@ func markerSafeElement(n *dom.Node) bool {
 
 // OptimizePaths rewrites every d attribute whose optimized encoding is
 // strictly shorter. Unparseable path data is left as found.
-func OptimizePaths(doc *dom.Node, prec int, cache *PathCache) {
+func OptimizePaths(doc *dom.Node, refs *Refs, prec int, cache *PathCache) {
 	docSafe := noopSafeDoc(doc)
 	doc.Walk(func(n *dom.Node) bool {
 		if n.Kind != dom.KindElement || !pathDataElements[localName(n.Name)] {
@@ -302,7 +302,7 @@ func OptimizePaths(doc *dom.Node, prec int, cache *PathCache) {
 		if !ok {
 			return true
 		}
-		p, noops, collinear := pathOptions(n, prec, docSafe)
+		p, noops, collinear := pathOptions(refs, n, prec, docSafe)
 		out, ok := cache.optimize(d, p, noops, collinear)
 		// An empty result is only valid when the input path was itself
 		// empty of any drawing.
@@ -348,21 +348,6 @@ func noopSafeDoc(doc *dom.Node) bool {
 		return safe
 	})
 	return safe
-}
-
-// animatesProp reports whether a SMIL child of e animates a property the
-// predicate accepts. Animations target their parent unless they carry an
-// href; the href form is rare enough to leave to the document-wide gates.
-func animatesProp(e *dom.Node, accept func(string) bool) bool {
-	for _, c := range e.Children {
-		if c.Kind != dom.KindElement || !animationElements[localName(c.Name)] || c.HasAttr("href") || c.HasAttr("xlink:href") {
-			continue
-		}
-		if v, ok := c.AttrValue("attributeName"); !ok || accept(strings.TrimSpace(v)) {
-			return true
-		}
-	}
-	return false
 }
 
 // underFilter reports whether a filter applies to the element or any of its
