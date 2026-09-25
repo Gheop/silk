@@ -4,7 +4,12 @@ on:
   push:
     branches: [master]
     tags: ['v*']
+    paths-ignore: &docs
+      - 'README.md'
+      - 'LICENSE'
+      - 'docs/**'
   pull_request:
+    paths-ignore: *docs
 
 # Jobs opt into the permissions they need; nothing is granted by default.
 permissions: {}
