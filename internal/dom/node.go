@@ -187,8 +187,23 @@ func (n *Node) CanonicalizeStartTag() {
 		}
 	}
 	// The tag itself may hold whitespace before '>' or between name and the
-	// first attribute even with no attributes at all.
-	if bytes.ContainsAny(n.rawStart, "\n\t\r") {
+	// first attribute even with no attributes at all. Only the gaps around
+	// the attributes need scanning: their raw bytes were just proven clean,
+	// and on a megabyte path element they dwarf the tag's own few bytes.
+	head, tail := n.rawStart, []byte(nil)
+	if len(n.Attrs) > 0 {
+		total := 0
+		for i := range n.Attrs {
+			total += len(n.Attrs[i].raw)
+		}
+		// Attributes are contiguous in the start tag, each raw beginning
+		// with its separating whitespace, so the first raw's first
+		// occurrence marks where they start.
+		if idx := bytes.Index(n.rawStart, n.Attrs[0].raw); total > 0 && idx >= 0 && idx+total <= len(n.rawStart) {
+			head, tail = n.rawStart[:idx], n.rawStart[idx+total:]
+		}
+	}
+	if bytes.ContainsAny(head, "\n\t\r") || bytes.ContainsAny(tail, "\n\t\r") {
 		n.modified = true
 		n.canonical = true
 	}
