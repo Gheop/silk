@@ -20,248 +20,266 @@ type arcSeg struct {
 // Every sample must stay within the tube around the circle, and the run
 // keeps a single rotation direction with total sweep under 2π (an arc whose
 // endpoints coincide renders as nothing).
+//
+// Only provably unstroked, markerless geometry converts (strokeSafe, the
+// RemoveNoops precondition). On a stroked outline the swap moves both stroke
+// edges, which hairlines turn into flipped pixels; and within the tight
+// tube left for strokes the stability probe, which moves an endpoint by
+// 2√2·tolAt along the chord, can never pass, while trying cost O(n²) per
+// rejected group (a 5000-cubic stroked circle took 18 s for zero arcs).
 func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
-	if tol <= 0 {
+	if tol <= 0 || !strokeSafe || !hasCubic(cs) {
 		return cs
 	}
-	// Without the stroke-safe tube the budget is tol = tolAt/2 while the
-	// stability probe moves an endpoint by 2√2·tolAt along the chord, which
-	// shifts the reconstructed centre by at least half of that: no run can
-	// pass, and trying costs O(n²) per rejected group (a 5000-cubic stroked
-	// circle took 18 s for zero arcs).
-	if !strokeSafe {
-		return cs
-	}
-	hasCubic := false
-	for i := range cs {
-		if op := cs[i].Op | 0x20; op == 'c' || op == 's' {
-			hasCubic = true
-			break
-		}
-	}
-	if !hasCubic {
-		return cs
-	}
-	out := make([]Cmd, 0, len(cs))
-	var cx, cy, spX, spY float64
-	var pc2x, pc2y float64 // absolute second control of the previous cubic
-	prevCubic := false
-
-	// cubicAbs resolves command k (a cubic) to absolute control points from
-	// the current point, deriving a smooth command's first control the way
-	// the consumer would.
-	cubicAbs := func(k int) (c1x, c1y, c2x, c2y, x, y float64) {
-		c := cs[k]
-		rel := c.Op >= 'a'
-		at := func(i int) (float64, float64) {
-			if rel {
-				return cx + c.Args[i], cy + c.Args[i+1]
-			}
-			return c.Args[i], c.Args[i+1]
-		}
-		if c.Op|0x20 == 's' {
-			c1x, c1y = cx, cy
-			if prevCubic {
-				c1x, c1y = 2*cx-pc2x, 2*cy-pc2y
-			}
-			c2x, c2y = at(0)
-			x, y = at(2)
-			return
-		}
-		c1x, c1y = at(0)
-		c2x, c2y = at(2)
-		x, y = at(4)
-		return
-	}
-
-	// copyCubic emits command k verbatim and advances the tracked state.
-	copyCubic := func(k int) {
-		_, _, c2x, c2y, x, y := cubicAbs(k)
-		out = append(out, cs[k])
-		pc2x, pc2y = c2x, c2y
-		cx, cy = x, y
-		prevCubic = true
-	}
-
+	a := arcConverter{cs: cs, out: make([]Cmd, 0, len(cs)), tol: tol, prec: prec}
 	for i := 0; i < len(cs); {
-		op := cs[i].Op | 0x20
-		if op != 'c' && op != 's' {
-			c := cs[i]
-			out = append(out, c)
-			rel := c.Op >= 'a'
-			switch op {
-			case 'm':
-				if rel {
-					cx, cy = cx+c.Args[0], cy+c.Args[1]
-				} else {
-					cx, cy = c.Args[0], c.Args[1]
-				}
-				spX, spY = cx, cy
-			case 'z':
-				cx, cy = spX, spY
-			case 'l', 'q', 't', 'a':
-				n := len(c.Args)
-				x, y := c.Args[n-2], c.Args[n-1]
-				if rel {
-					x, y = cx+x, cy+y
-				}
-				cx, cy = x, y
-			case 'h':
-				if rel {
-					cx += c.Args[0]
-				} else {
-					cx = c.Args[0]
-				}
-			case 'v':
-				if rel {
-					cy += c.Args[0]
-				} else {
-					cy = c.Args[0]
-				}
-			}
-			prevCubic = false
-			i++
-			continue
-		}
-		c1x, c1y, c2x, c2y, x, y := cubicAbs(i)
-		fit, delta, ok := fitArcCircle(cx, cy, c1x, c1y, c2x, c2y, x, y, tol, prec, strokeSafe)
-		if !ok {
-			copyCubic(i)
-			i++
-			continue
-		}
-		group := []arcSeg{{x, y, delta}}
-		sweep := delta
-		// Extend over following cubics on the same circle, walking a
-		// shadow of the tracked state.
-		gx, gy := x, y
-		gc2x, gc2y := c2x, c2y
-		j := i + 1
-		for j < len(cs) {
-			if op := cs[j].Op | 0x20; op != 'c' && op != 's' {
-				break
-			}
-			sc, ss := cx, cy
-			spc, spq := pc2x, pc2y
-			wasCubic := prevCubic
-			cx, cy, pc2x, pc2y, prevCubic = gx, gy, gc2x, gc2y, true
-			d1x, d1y, d2x, d2y, nx, ny := cubicAbs(j)
-			cx, cy, pc2x, pc2y, prevCubic = sc, ss, spc, spq, wasCubic
-			d, ok := onCircle(fit, gx, gy, d1x, d1y, d2x, d2y, nx, ny, tol, strokeSafe)
-			if !ok || sweep+d > 3.8*math.Pi {
-				break
-			}
-			sweep += d
-			group = append(group, arcSeg{nx, ny, d})
-			gx, gy, gc2x, gc2y = nx, ny, d2x, d2y
-			j++
-		}
-		// The command after the run would reflect the last cubic's control,
-		// which must stay a literal curve: keep trimming while the kept
-		// cubic is itself a smooth one, since an S emitted after an arc
-		// would reflect the current point instead of its predecessor.
-		for j < len(cs) && (cs[j].Op|0x20) == 's' && len(group) > 0 {
-			group = group[:len(group)-1]
-			j--
-		}
-		if len(group) < 2 {
-			copyCubic(i)
-			i++
-			continue
-		}
-		// The renderer re-derives the centre from (radius, chord); near the
-		// half turn that square root is ill-conditioned and a sub-tolerance
-		// radius or chord change moves the arc by sqrt(Δ·2r) — pixels, not
-		// sub-pixels. Every emitted segment must therefore reconstruct, with
-		// the emitted radius and a chord perturbed by the worst endpoint
-		// rounding, to within the fit's own tube.
-		remit := fit.r
-		if prec >= 0 {
-			remit = quantize(fit.r, prec)
-		}
-		segStart := func(k int) (float64, float64) {
-			if k == 0 {
-				return cx, cy // current point before the run, not the first cubic's end
-			}
-			return group[k-1].ex, group[k-1].ey
-		}
-		stable := func(k int, segs []arcSeg) bool {
-			s := sweepOf(segs)
-			if s > 1.9*math.Pi {
-				return false
-			}
-			sx, sy := segStart(k)
-			last := segs[len(segs)-1]
-			dx, dy := last.ex-sx, last.ey-sy
-			l := math.Hypot(dx, dy)
-			if l == 0 {
-				return false
-			}
-			sag := fit.r
-			if disc := fit.r*fit.r - l*l/4; disc > 0 {
-				sag = l * l / 4 / (fit.r + math.Sqrt(disc))
-			}
-			tube := arcTube(fit.r, sag, tol, strokeSafe)
-			eps := 0.0
-			if prec >= 0 {
-				eps = 2 * math.Sqrt2 * tolAt(prec)
-			}
-			for _, e := range [...]float64{0, eps, -eps} {
-				px, py := last.ex+e*dx/l, last.ey+e*dy/l
-				rcx, rcy, rr, ok := arcRenderCenter(remit, sx, sy, px, py, s > math.Pi, fit.ccw)
-				if !ok || math.Hypot(rcx-fit.cx, rcy-fit.cy)+math.Abs(rr-fit.r) > tube {
-					return false
-				}
-			}
-			return true
-		}
-		emit := func(segs []arcSeg) {
-			s := sweepOf(segs)
-			last := segs[len(segs)-1]
-			laf, sf := 0.0, 0.0
-			if s > math.Pi {
-				laf = 1
-			}
-			if fit.ccw {
-				sf = 1
-			}
-			out = append(out, Cmd{Op: 'A', Args: []float64{remit, remit, 0, laf, sf, last.ex, last.ey}})
-		}
-		// Prefer the coarsest stable splitting: the whole run when it can
-		// (an endpoint arc cannot span 2π — coincident endpoints render as
-		// nothing), otherwise greedy segments each validated for stability.
-		var spans [][2]int
-		if total := sweepOf(group); total <= 1.9*math.Pi && stable(0, group) {
-			spans = [][2]int{{0, len(group)}}
-		} else {
-			ok := true
-			for f := 0; f < len(group); {
-				t := f + 1
-				for t < len(group) && stable(f, group[f:t+1]) {
-					t++
-				}
-				if t == f+1 && !stable(f, group[f:t]) {
-					ok = false
-					break
-				}
-				spans = append(spans, [2]int{f, t})
-				f = t
-			}
-			if !ok {
-				copyCubic(i)
-				i++
+		if op := cs[i].Op | 0x20; op == 'c' || op == 's' {
+			if n := a.convertRun(i); n > 0 {
+				i += n
 				continue
 			}
 		}
-		for _, sp := range spans {
-			emit(group[sp[0]:sp[1]])
-		}
-		last := group[len(group)-1]
-		cx, cy = last.ex, last.ey
-		prevCubic = false
-		i += len(group)
+		a.out = append(a.out, cs[i])
+		a.pen.advance(cs[i])
+		i++
 	}
-	return out
+	return a.out
+}
+
+func hasCubic(cs []Cmd) bool {
+	for i := range cs {
+		if op := cs[i].Op | 0x20; op == 'c' || op == 's' {
+			return true
+		}
+	}
+	return false
+}
+
+// pen is the consumer's drawing state along a command list.
+type pen struct {
+	x, y       float64 // current point
+	sx, sy     float64 // subpath start
+	c2x, c2y   float64 // absolute second control of the previous cubic
+	afterCubic bool    // the previous command was a cubic
+}
+
+// cubic resolves c, a C or S command, to absolute control points, deriving
+// a smooth command's first control the way the consumer would.
+func (p *pen) cubic(c Cmd) (c1x, c1y, c2x, c2y, x, y float64) {
+	rel := c.Op >= 'a'
+	at := func(i int) (float64, float64) {
+		if rel {
+			return p.x + c.Args[i], p.y + c.Args[i+1]
+		}
+		return c.Args[i], c.Args[i+1]
+	}
+	if c.Op|0x20 == 's' {
+		c1x, c1y = p.x, p.y
+		if p.afterCubic {
+			c1x, c1y = 2*p.x-p.c2x, 2*p.y-p.c2y
+		}
+		c2x, c2y = at(0)
+		x, y = at(2)
+		return
+	}
+	c1x, c1y = at(0)
+	c2x, c2y = at(2)
+	x, y = at(4)
+	return
+}
+
+// advance moves the pen past c.
+func (p *pen) advance(c Cmd) {
+	rel := c.Op >= 'a'
+	switch c.Op | 0x20 {
+	case 'c', 's':
+		_, _, p.c2x, p.c2y, p.x, p.y = p.cubic(c)
+		p.afterCubic = true
+		return
+	case 'm':
+		if rel {
+			p.x, p.y = p.x+c.Args[0], p.y+c.Args[1]
+		} else {
+			p.x, p.y = c.Args[0], c.Args[1]
+		}
+		p.sx, p.sy = p.x, p.y
+	case 'z':
+		p.x, p.y = p.sx, p.sy
+	case 'l', 'q', 't', 'a':
+		n := len(c.Args)
+		x, y := c.Args[n-2], c.Args[n-1]
+		if rel {
+			x, y = p.x+x, p.y+y
+		}
+		p.x, p.y = x, y
+	case 'h':
+		if rel {
+			p.x += c.Args[0]
+		} else {
+			p.x = c.Args[0]
+		}
+	case 'v':
+		if rel {
+			p.y += c.Args[0]
+		} else {
+			p.y = c.Args[0]
+		}
+	}
+	p.afterCubic = false
+}
+
+// arcConverter carries one convertArcs call: the input, the output so far,
+// and the pen at the end of what has been emitted.
+type arcConverter struct {
+	cs   []Cmd
+	out  []Cmd
+	tol  float64
+	prec int
+	pen  pen
+}
+
+// convertRun tries to replace the cubics starting at i with arcs and
+// reports how many it consumed; 0 leaves cs[i] to be copied as a curve.
+func (a *arcConverter) convertRun(i int) int {
+	c1x, c1y, c2x, c2y, x, y := a.pen.cubic(a.cs[i])
+	fit, delta, ok := fitArcCircle(a.pen.x, a.pen.y, c1x, c1y, c2x, c2y, x, y, a.tol, a.prec)
+	if !ok {
+		return 0
+	}
+	group := a.run(i, fit, arcSeg{x, y, delta})
+	if len(group) < 2 {
+		return 0
+	}
+	remit := fit.r
+	if a.prec >= 0 {
+		remit = quantize(fit.r, a.prec)
+	}
+	spans, ok := a.split(group, fit, remit)
+	if !ok {
+		return 0
+	}
+	for _, sp := range spans {
+		a.emit(group[sp[0]:sp[1]], fit, remit)
+	}
+	last := group[len(group)-1]
+	a.pen.x, a.pen.y = last.ex, last.ey
+	a.pen.afterCubic = false
+	return len(group)
+}
+
+// run extends the fitted cubic at i over the following cubics on the same
+// circle, then gives back the trailing ones a smooth command after the run
+// would reflect.
+func (a *arcConverter) run(i int, fit arcFit, first arcSeg) []arcSeg {
+	group := []arcSeg{first}
+	sweep := first.delta
+	// A shadow pen walks the run; the real one stays at its start.
+	g := a.pen
+	g.advance(a.cs[i])
+	j := i + 1
+	for ; j < len(a.cs); j++ {
+		if op := a.cs[j].Op | 0x20; op != 'c' && op != 's' {
+			break
+		}
+		d1x, d1y, d2x, d2y, nx, ny := g.cubic(a.cs[j])
+		d, ok := onCircle(fit, g.x, g.y, d1x, d1y, d2x, d2y, nx, ny, a.tol)
+		if !ok || sweep+d > 3.8*math.Pi {
+			break
+		}
+		sweep += d
+		group = append(group, arcSeg{nx, ny, d})
+		g.advance(a.cs[j])
+	}
+	// The command after the run would reflect the last cubic's control,
+	// which must stay a literal curve: keep trimming while the kept cubic
+	// is itself a smooth one, since an S emitted after an arc would reflect
+	// the current point instead of its predecessor.
+	for j < len(a.cs) && (a.cs[j].Op|0x20) == 's' && len(group) > 0 {
+		group = group[:len(group)-1]
+		j--
+	}
+	return group
+}
+
+// split picks the coarsest stable splitting of a run: the whole run when it
+// can (an endpoint arc cannot span 2π: coincident endpoints render as
+// nothing), otherwise greedy segments each validated for stability. It
+// fails when some single cubic of the run is unstable on its own.
+func (a *arcConverter) split(group []arcSeg, fit arcFit, remit float64) ([][2]int, bool) {
+	// stable checks the arc over group[f:t], which starts at the end of
+	// group[f-1], or at the current point before the run.
+	stable := func(f, t int) bool {
+		sx, sy := a.pen.x, a.pen.y
+		if f > 0 {
+			sx, sy = group[f-1].ex, group[f-1].ey
+		}
+		return a.stable(fit, remit, sx, sy, group[f:t])
+	}
+	if sweepOf(group) <= 1.9*math.Pi && stable(0, len(group)) {
+		return [][2]int{{0, len(group)}}, true
+	}
+	var spans [][2]int
+	for f := 0; f < len(group); {
+		t := f + 1
+		for t < len(group) && stable(f, t+1) {
+			t++
+		}
+		if t == f+1 && !stable(f, t) {
+			return nil, false
+		}
+		spans = append(spans, [2]int{f, t})
+		f = t
+	}
+	return spans, true
+}
+
+// stable reports whether the arc over segs, drawn from (sx, sy) with the
+// emitted radius, reconstructs within the fit's own tube, also when its end
+// moves by the worst endpoint rounding along the chord. The renderer
+// re-derives the centre from (radius, chord); near the half turn that
+// square root is ill-conditioned and a sub-tolerance radius or chord change
+// moves the arc by sqrt(Δ·2r): pixels, not sub-pixels.
+func (a *arcConverter) stable(fit arcFit, remit, sx, sy float64, segs []arcSeg) bool {
+	s := sweepOf(segs)
+	if s > 1.9*math.Pi {
+		return false
+	}
+	last := segs[len(segs)-1]
+	dx, dy := last.ex-sx, last.ey-sy
+	l := math.Hypot(dx, dy)
+	if l == 0 {
+		return false
+	}
+	sag := fit.r
+	if disc := fit.r*fit.r - l*l/4; disc > 0 {
+		sag = l * l / 4 / (fit.r + math.Sqrt(disc))
+	}
+	tube := arcTube(fit.r, sag, a.tol)
+	eps := 0.0
+	if a.prec >= 0 {
+		eps = 2 * math.Sqrt2 * tolAt(a.prec)
+	}
+	for _, e := range [...]float64{0, eps, -eps} {
+		px, py := last.ex+e*dx/l, last.ey+e*dy/l
+		rcx, rcy, rr, ok := arcRenderCenter(remit, sx, sy, px, py, s > math.Pi, fit.ccw)
+		if !ok || math.Hypot(rcx-fit.cx, rcy-fit.cy)+math.Abs(rr-fit.r) > tube {
+			return false
+		}
+	}
+	return true
+}
+
+// emit appends the endpoint arc covering segs.
+func (a *arcConverter) emit(segs []arcSeg, fit arcFit, remit float64) {
+	laf, sf := 0.0, 0.0
+	if sweepOf(segs) > math.Pi {
+		laf = 1
+	}
+	if fit.ccw {
+		sf = 1
+	}
+	last := segs[len(segs)-1]
+	a.out = append(a.out, Cmd{Op: 'A', Args: []float64{remit, remit, 0, laf, sf, last.ex, last.ey}})
 }
 
 // arcRenderCenter mirrors the renderer's endpoint-arc centre reconstruction
@@ -288,15 +306,11 @@ func arcRenderCenter(r, p0x, p0y, pex, pey float64, laf, sf bool) (float64, floa
 	return (p0x+pex)/2 - s*h*dy/l, (p0y+pey)/2 + s*h*dx/l, r, true
 }
 
-// arcTube is the deviation budget for swapping cubics and endpoint arcs.
-// Only provably unstroked, markerless geometry (the RemoveNoops
-// precondition) may use the radius-relative budget that admits the kappa
-// approximation: on a stroked outline the swap moves both stroke edges,
-// which hairlines turn into flipped pixels.
-func arcTube(r, sag, tol float64, strokeSafe bool) float64 {
-	if !strokeSafe {
-		return tol
-	}
+// arcTube is the deviation budget for swapping cubics and endpoint arcs on
+// unstroked geometry: radius-relative, to admit the kappa approximation
+// drawing tools export (see onCircle), capped by 1% of the segment's bulge
+// and half a unit.
+func arcTube(r, sag, tol float64) float64 {
 	return max(tol, min(5e-4*r, 0.01*sag, 0.5))
 }
 
@@ -318,7 +332,7 @@ func bezierAt(t, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y float64) (float64, float
 // accepts it when the quarter samples stay inside the tube, the bulge is
 // deep enough to be genuinely curved (a near-flat fit puts the center far
 // away and unstably), and the sweep direction is consistent.
-func fitArcCircle(p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64, prec int, strokeSafe bool) (arcFit, float64, bool) {
+func fitArcCircle(p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64, prec int) (arcFit, float64, bool) {
 	mx, my := bezierAt(0.5, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y)
 	d := 2 * (p0x*(my-p3y) + mx*(p3y-p0y) + p3x*(p0y-my))
 	if math.Abs(d) < 1e-12 {
@@ -350,12 +364,12 @@ func fitArcCircle(p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64, prec int,
 	dm := math.Mod(am-a0+4*math.Pi, 2*math.Pi)
 	d1 := math.Mod(a1-a0+4*math.Pi, 2*math.Pi)
 	fit.ccw = dm < d1
-	delta, ok := onCircle(fit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol, strokeSafe)
+	delta, ok := onCircle(fit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol)
 	if !ok {
 		return arcFit{}, 0, false
 	}
 	if snapped, ok := snapRadius(fit, prec, p0x, p0y, p3x, p3y); ok {
-		if d, ok := onCircle(snapped, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol, strokeSafe); ok {
+		if d, ok := onCircle(snapped, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol); ok {
 			return snapped, d, true
 		}
 	}
@@ -404,13 +418,13 @@ func snapRadius(fit arcFit, prec int, p0x, p0y, p3x, p3y float64) (arcFit, bool)
 // stays within 1% of this segment's own bulge: a shallow sweep on a huge
 // circle is close to a straight stroke, where half a unit of drift is a
 // visibly displaced line. The original endpoints are kept exactly.
-func onCircle(fit arcFit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64, strokeSafe bool) (float64, bool) {
+func onCircle(fit arcFit, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y, tol float64) (float64, bool) {
 	chord2 := (p3x-p0x)*(p3x-p0x) + (p3y-p0y)*(p3y-p0y)
 	sag := fit.r
 	if disc := fit.r*fit.r - chord2/4; disc > 0 {
 		sag = chord2 / 4 / (fit.r + math.Sqrt(disc))
 	}
-	tube := arcTube(fit.r, sag, tol, strokeSafe)
+	tube := arcTube(fit.r, sag, tol)
 	for _, t := range [...]float64{0.25, 0.5, 0.75, 1} {
 		bx, by := bezierAt(t, p0x, p0y, c1x, c1y, c2x, c2y, p3x, p3y)
 		if math.Abs(math.Hypot(bx-fit.cx, by-fit.cy)-fit.r) > tube {
