@@ -95,6 +95,13 @@ func collapseGroup(g *dom.Node, refs *Refs) bool {
 	if child == nil || child.HasAttr("style") {
 		return false
 	}
+	// A nested svg establishes its own viewport and SVG 1.1 renderers
+	// ignore a transform on it (and on symbol, clipPath, mask, pattern,
+	// marker): the group's attributes would land where they no longer apply.
+	switch localName(child.Name) {
+	case "svg", "symbol", "clipPath", "mask", "pattern", "marker":
+		return false
+	}
 	if id, ok := child.AttrValue("id"); ok && refs.UsedID(id) {
 		// The child renders differently through <use> once attributes land
 		// on it directly.

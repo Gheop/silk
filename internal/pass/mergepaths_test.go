@@ -98,6 +98,15 @@ func TestMergePathsKeepsPathsWithChildren(t *testing.T) {
 	}
 }
 
+func TestMergePathsKeepsVectorEffect(t *testing.T) {
+	// Under non-scaling-stroke the user-space stroke width says nothing
+	// about the rendered reach, so overlap cannot be ruled out.
+	in := `<svg><g transform="scale(.1)"><path vector-effect="non-scaling-stroke" stroke="red" d="M0 0h1"/><path vector-effect="non-scaling-stroke" stroke="red" d="M9 0h1"/></g></svg>`
+	if got := runMerge(t, in); got != in {
+		t.Errorf("non-scaling-stroke paths merged:\n got: %q\nwant: %q", got, in)
+	}
+}
+
 func TestMergePathsKeepsBBoxRelativeCSS(t *testing.T) {
 	// clip-path: inset() and friends are relative to the element's own
 	// bounding box even without a url() reference.

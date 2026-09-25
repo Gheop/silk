@@ -125,3 +125,12 @@ func TestCollapseGroupsLinear(t *testing.T) {
 		t.Errorf("nested collapse:\n got: %q\nwant: %q", got, want)
 	}
 }
+
+func TestCollapseGroupsKeepsAttrsOffNestedSVG(t *testing.T) {
+	// SVG 1.1 renderers ignore transform on a nested svg: pushing the
+	// group's transform down would drop it there.
+	in := `<svg><g transform="scale(2)"><svg width="10" height="10"><path d="M0 0h1"/></svg></g></svg>`
+	if got := runGroups(t, in); got != in {
+		t.Errorf("group attributes pushed onto a nested svg:\n got: %q\nwant: %q", got, in)
+	}
+}

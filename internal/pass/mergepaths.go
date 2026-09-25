@@ -160,8 +160,10 @@ func blockedAttr(name, value string) bool {
 	}
 	// Whatever their syntax (url(), inset(), blur()...), these resolve
 	// against the element's own bounding box or identity.
+	// vector-effect="non-scaling-stroke" makes the stroke width a viewport
+	// quantity the user-space reach estimate cannot bound.
 	switch name {
-	case "clip-path", "mask", "filter", "transform-origin":
+	case "clip-path", "mask", "filter", "transform-origin", "vector-effect":
 		return true
 	}
 	// Bounding-box-relative units make gradients, patterns, clips and masks
