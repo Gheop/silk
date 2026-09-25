@@ -231,6 +231,9 @@ func (s *scanner) number() (float64, error) {
 		if neg {
 			v = -v
 		}
+		if v > maxMagnitude || v < -maxMagnitude {
+			return 0, s.errf("number %s beyond %g", s.d[start:s.pos], maxMagnitude)
+		}
 		return v, nil
 	}
 	text := s.d[start:s.pos]
@@ -242,8 +245,18 @@ func (s *scanner) number() (float64, error) {
 	if err != nil {
 		return 0, s.errf("number %q: %v", text, err)
 	}
+	if v > maxMagnitude || v < -maxMagnitude {
+		return 0, s.errf("number %q beyond %g", text, maxMagnitude)
+	}
 	return v, nil
 }
+
+// maxMagnitude bounds accepted coordinates. Relative-to-absolute sums and
+// arc geometry on values near the float64 range overflow to ±Inf, which the
+// formatter would then write into the document ("h+Inf"); far below that,
+// float32 renderers have already lost every fractional digit. A path beyond
+// the bound is a parse error, so the attribute stays untouched.
+const maxMagnitude = 1e15
 
 // digitsAcc consumes digits like digits, accumulating their value into mant;
 // exact is cleared once the accumulation could no longer be trusted.

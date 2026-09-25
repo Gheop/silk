@@ -48,3 +48,13 @@ func TestConvertTransforms(t *testing.T) {
 		}
 	}
 }
+
+func TestConvertTransformsKeepsOverflowingMatrix(t *testing.T) {
+	// 1e200 × 1e200 overflows to +Inf; the formatter must never write it.
+	in := `<svg><g transform="scale(1e200) scale(1e200)"/></svg>`
+	doc := parse(t, in)
+	ConvertTransforms(doc, 0)
+	if got := string(dom.Serialize(doc)); got != in {
+		t.Errorf("overflowing transform rewritten:\n got: %q\nwant: %q", got, in)
+	}
+}

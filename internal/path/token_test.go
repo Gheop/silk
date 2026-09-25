@@ -119,3 +119,16 @@ func equalCmds(a, b []Cmd) bool {
 	}
 	return true
 }
+
+func TestParseRejectsHugeMagnitudes(t *testing.T) {
+	// 1e308 parses as a finite float, but relative accumulation overflows
+	// to +Inf and the formatter would emit "h+Inf" into the document.
+	for _, d := range []string{"M1e308 0l1e308 0", "M0 0L1e16 0", "M0 0l-1000000000000000.5 0"} {
+		if _, err := Parse([]byte(d)); err == nil {
+			t.Errorf("Parse(%q) accepted a magnitude beyond %g", d, maxMagnitude)
+		}
+	}
+	if _, err := Parse([]byte("M0 0L1e15 -1e15")); err != nil {
+		t.Errorf("Parse rejected a value at the bound: %v", err)
+	}
+}

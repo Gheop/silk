@@ -47,8 +47,8 @@ func ConvertTransforms(doc *dom.Node, prec int) {
 				continue
 			}
 			m, err := parseTransformList(v)
-			if err != nil {
-				continue
+			if err != nil || !m.finite() {
+				continue // multiplying huge factors overflows: keep as authored
 			}
 			m.e = quantizeTo(m.e, prec)
 			m.f = quantizeTo(m.f, prec)
@@ -261,4 +261,14 @@ func (p *tparser) number() (float64, error) {
 		return 0, tsyntaxError{}
 	}
 	return v, nil
+}
+
+// finite reports that no component overflowed to ±Inf or NaN.
+func (m matrix) finite() bool {
+	for _, v := range [...]float64{m.a, m.b, m.c, m.d, m.e, m.f} {
+		if math.IsInf(v, 0) || math.IsNaN(v) {
+			return false
+		}
+	}
+	return true
 }
