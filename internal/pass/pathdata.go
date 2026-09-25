@@ -171,13 +171,6 @@ func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear b
 		}
 		prec = min(prec+bump, 8)
 	}
-	if underFilter(n) {
-		// A filter's primitives sample relative to the geometry, so segment
-		// removal and vertex merging (which can change the tight bbox) stay
-		// off; plain coordinate rounding measures within tolerance even
-		// through feTurbulence on the corpus.
-		return prec, false, false
-	}
 	if !markerSafeElement(n) {
 		// An orient="auto" marker takes its rotation from vertex tangents,
 		// whose length can be smaller than the rounding residual of the
@@ -190,7 +183,14 @@ func pathOptions(n *dom.Node, prec int, docSafe bool) (p int, noops, collinear b
 		// length errors accumulate along the stroke by the segment count.
 		// Two extra decimals keep the accumulated phase error below a
 		// fraction of a period on paths thousands of segments long.
-		return min(prec+2, 10), false, false
+		prec = min(prec+2, 10)
+	}
+	if underFilter(n) || !dashSafeElement(n) {
+		// A filter's primitives sample relative to the geometry, so segment
+		// removal and vertex merging (which can change the tight bbox) stay
+		// off; plain coordinate rounding measures within tolerance even
+		// through feTurbulence on the corpus. The same holds for dashes.
+		return prec, false, false
 	}
 	return prec, docSafe && noopSafeElement(n), docSafe && markerSafeElement(n)
 }
