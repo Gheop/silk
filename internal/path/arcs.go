@@ -146,8 +146,11 @@ func convertArcs(cs []Cmd, tol float64, prec int, strokeSafe bool) []Cmd {
 			gx, gy, gc2x, gc2y = nx, ny, d2x, d2y
 			j++
 		}
-		// The command after the run would reflect the last cubic's control.
-		if j < len(cs) && (cs[j].Op|0x20) == 's' {
+		// The command after the run would reflect the last cubic's control,
+		// which must stay a literal curve: keep trimming while the kept
+		// cubic is itself a smooth one, since an S emitted after an arc
+		// would reflect the current point instead of its predecessor.
+		for j < len(cs) && (cs[j].Op|0x20) == 's' && len(group) > 0 {
 			group = group[:len(group)-1]
 			j--
 		}

@@ -91,3 +91,23 @@ func TestCloseVectorEmitsCleanNumbers(t *testing.T) {
 		t.Errorf("raw float64 text in output: %q", got)
 	}
 }
+
+func TestConvertArcsTrimsSmoothChain(t *testing.T) {
+	// An S after the run reflects the cubic kept literal before it; when
+	// that cubic is itself an S, it reflects its own predecessor, so the
+	// trim must continue until an explicit C remains. C C S S leaves no
+	// pair to convert; C C C S S still converts the leading pair.
+	opts := Options{Precision: 3, RemoveNoops: true, MergeCollinear: true}
+	ccss := "M100 50C100 77.614 77.614 100 50 100C22.386 100 0 77.614 0 50S22.386 0 50 0S100 10 90 40"
+	if got := opt(t, ccss, opts); strings.ContainsAny(got, "aA") {
+		t.Errorf("C C S S: arc emitted although the smooth chain reaches the run: %q", got)
+	}
+	cccss := "M100 50C100 77.614 77.614 100 50 100C22.386 100 0 77.614 0 50C0 22.386 22.386 0 50 0S77.614 0 100 22.386S100 60 90 70"
+	got := opt(t, cccss, opts)
+	if !strings.ContainsAny(got, "aA") {
+		t.Errorf("C C C S S: no arc for the leading pair: %q", got)
+	}
+	if i := strings.IndexAny(got, "aA"); i >= 0 && !strings.ContainsAny(got[i:], "cC") {
+		t.Errorf("C C C S S: no literal cubic kept between the arc and the smooth chain: %q", got)
+	}
+}
