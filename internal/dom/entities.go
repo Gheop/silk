@@ -19,6 +19,12 @@ func decodeAttrValue(v []byte, custom map[string]string) (value string, opaque b
 	if !bytes.ContainsRune(v, '&') {
 		return string(v), false
 	}
+	// Replacement text has no size limit in XML; here it has one. A short
+	// document can reference a large entity thousands of times, so the
+	// decoded value is bounded by the raw one: past the budget the value
+	// stays opaque (kept literally), which is already how an unresolvable
+	// reference is handled.
+	budget := max(4*len(v), 64<<10)
 	var b strings.Builder
 	b.Grow(len(v))
 	for i := 0; i < len(v); {
@@ -35,6 +41,9 @@ func decodeAttrValue(v []byte, custom map[string]string) (value string, opaque b
 		if r, ok := resolveEntity(name); ok {
 			b.WriteRune(r)
 		} else if s, ok := custom[name]; ok {
+			if b.Len()+len(s) > budget {
+				return string(v), true
+			}
 			b.WriteString(s)
 		} else {
 			return string(v), true
@@ -56,11 +65,24 @@ func parseInternalSubset(doctype []byte) map[string]string {
 		return nil
 	}
 	out := map[string]string{}
+	total := 0
 	for _, m := range entityDeclPattern.FindAllSubmatch(doctype[i:], -1) {
+		// Declarations past the cap stay unresolved, hence opaque wherever
+		// they are referenced: bounded work, same output either way.
+		if total += len(m[2]); len(out) >= maxEntityDecls || total > maxEntityBytes {
+			break
+		}
 		out[string(m[1])] = string(m[2])
 	}
 	return out
 }
+
+// Caps on the internal subset: real documents declare a handful of short
+// namespace entities (Illustrator), never thousands or megabytes.
+const (
+	maxEntityDecls = 256
+	maxEntityBytes = 1 << 20
+)
 
 func resolveEntity(name string) (rune, bool) {
 	switch name {

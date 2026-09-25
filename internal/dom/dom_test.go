@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Verbatim round-trip: Serialize(Parse(x)) must equal x for any well-formed
@@ -201,5 +202,37 @@ func TestParseUTF16(t *testing.T) {
 		if !strings.Contains(out, `encoding="UTF-8"`) || !strings.Contains(out, `d="M0 0h20"`) {
 			t.Errorf("%s: bad transcode: %s", name, out)
 		}
+	}
+}
+
+func TestEntityExpansionIsBounded(t *testing.T) {
+	// A 100 KB entity referenced 20 000 times would decode to 2 GB; the
+	// value must stay opaque (raw kept) and the parse must stay cheap.
+	value := strings.Repeat("x", 100<<10)
+	refs := strings.Repeat("&e;", 20000)
+	in := `<!DOCTYPE svg [<!ENTITY e "` + value + `">]><svg><path d="M0 0" data-x="` + refs + `"/></svg>`
+	start := time.Now()
+	doc, err := Parse([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if el := time.Since(start); el > 2*time.Second {
+		t.Errorf("parse took %v: entity expansion is not bounded", el)
+	}
+	path := doc.Children[1].Children[0]
+	if _, ok := path.AttrValue("data-x"); ok {
+		t.Error("over-budget entity expansion decoded instead of staying opaque")
+	}
+	if got := string(Serialize(doc)); got != in {
+		t.Error("document with an over-budget entity not kept verbatim")
+	}
+	// Within budget, references still resolve.
+	small := `<!DOCTYPE svg [<!ENTITY ns "http://x">]><svg xmlns:a="&ns;"/>`
+	doc, err = Parse([]byte(small))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := doc.Children[1].AttrValue("xmlns:a"); !ok || v != "http://x" {
+		t.Errorf("small entity not resolved: %q %v", v, ok)
 	}
 }
