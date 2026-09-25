@@ -59,3 +59,12 @@ func TestConvertShapesKeepsPrefix(t *testing.T) {
 		t.Errorf("prefix lost on shape conversion: %q", got)
 	}
 }
+
+func TestConvertShapesKeepsRectUnderMarkers(t *testing.T) {
+	// Markers apply to path, line, polyline and polygon in browsers, not to
+	// rect: converting it would make the inherited markers appear.
+	in := `<svg><g marker-start="url(#m)"><rect width="1" height="1"/></g><marker id="m"/></svg>`
+	if got := runShapes(t, in); got != in {
+		t.Errorf("rect under markers converted:\n got: %q\nwant: %q", got, in)
+	}
+}

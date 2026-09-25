@@ -92,6 +92,11 @@ func convertRect(n *dom.Node) {
 	if n.HasAttr("rx") || n.HasAttr("ry") {
 		return // rounded corners need arcs; out of scope
 	}
+	// Browsers draw markers on path, line, polyline and polygon only: a
+	// rect under a marker property would grow markers once converted.
+	if !markerSafeElement(n) {
+		return
+	}
 	x, ok1 := shapeNum(n, "x")
 	y, ok2 := shapeNum(n, "y")
 	w, ok3 := shapeNum(n, "width")
