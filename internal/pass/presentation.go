@@ -78,7 +78,10 @@ var inheritedProps = map[string]bool{
 // geoAttrs lists per-element geometric attributes that tolerate the same
 // rounding as path coordinates: absolute values, error bounded by the
 // precision tolerance, no drift. The root <svg> (document size), viewBox,
-// and filter regions are deliberately absent.
+// and filter regions are deliberately absent. Gradient and pattern geometry
+// is only absolute under userSpaceOnUse; in the default objectBoundingBox
+// units a value is a fraction of the painted element's box, and a stop
+// offset always is, so those are reformatted exactly (see bboxRelative).
 var geoAttrs = map[string][]string{
 	"rect":           {"x", "y", "width", "height", "rx", "ry"},
 	"circle":         {"cx", "cy", "r"},
@@ -131,7 +134,9 @@ func OptimizePresentation(doc *dom.Node, refs *Refs, prec int) {
 		}
 		if names, ok := geoAttrs[localName(n.Name)]; ok {
 			gp := prec
-			if prec >= 0 {
+			if prec >= 0 && bboxRelative(n) {
+				gp = -1 // a fraction of an arbitrary box: no absolute tolerance
+			} else if prec >= 0 {
 				if bump, bok := scaleBump(n); !bok {
 					gp = -1 // unbounded amplification: reformat exactly
 				} else {
@@ -545,4 +550,25 @@ func dasharrayValueHasNegative(v string) bool {
 		}
 	}
 	return false
+}
+
+// bboxRelative reports whether the element's geometry is expressed as
+// fractions of the referencing element's bounding box: stop offsets always,
+// gradients and patterns unless their units say userSpaceOnUse. A rounding
+// error there scales with the painted box (0.0004 on a 4000-unit rect moves
+// a hard gradient edge by 1.6 units) and repeats with every pattern tile.
+func bboxRelative(n *dom.Node) bool {
+	var units string
+	switch localName(n.Name) {
+	case "stop":
+		return true
+	case "linearGradient", "radialGradient":
+		units = "gradientUnits"
+	case "pattern":
+		units = "patternUnits"
+	default:
+		return false
+	}
+	v, ok := n.AttrValue(units)
+	return !ok || strings.TrimSpace(v) != "userSpaceOnUse"
 }

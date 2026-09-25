@@ -50,13 +50,20 @@ func ConvertTransforms(doc *dom.Node, prec int) {
 			if err != nil || !m.finite() {
 				continue // multiplying huge factors overflows: keep as authored
 			}
-			m.e = quantizeTo(m.e, prec)
-			m.f = quantizeTo(m.f, prec)
+			tp := prec
+			if attr != "transform" && bboxRelative(n) {
+				// gradientTransform/patternTransform act in bounding-box
+				// units by default: a rounded translation there moves by
+				// a fraction of the painted element, not by a unit.
+				tp = -1
+			}
+			m.e = quantizeTo(m.e, tp)
+			m.f = quantizeTo(m.f, tp)
 			if m == identity {
 				n.RemoveAttr(attr)
 				continue
 			}
-			if s := shortestTransform(m, prec); len(s) < len(v) {
+			if s := shortestTransform(m, tp); len(s) < len(v) {
 				n.SetAttr(attr, s)
 			}
 		}

@@ -58,3 +58,19 @@ func TestConvertTransformsKeepsOverflowingMatrix(t *testing.T) {
 		t.Errorf("overflowing transform rewritten:\n got: %q\nwant: %q", got, in)
 	}
 }
+
+func TestGradientTransformTranslationStaysExactInBBoxUnits(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`<svg><linearGradient gradientTransform="translate(0.0004 0)"/></svg>`,
+			`<svg><linearGradient gradientTransform="translate(.0004)"/></svg>`},
+		{`<svg><linearGradient gradientUnits="userSpaceOnUse" gradientTransform="translate(0.0004 0)"/></svg>`,
+			`<svg><linearGradient gradientUnits="userSpaceOnUse"/></svg>`},
+	}
+	for _, tc := range cases {
+		doc := parse(t, tc.in)
+		ConvertTransforms(doc, 3)
+		if got := string(dom.Serialize(doc)); got != tc.want {
+			t.Errorf("transforms(%q)\n got: %q\nwant: %q", tc.in, got, tc.want)
+		}
+	}
+}

@@ -284,3 +284,25 @@ func TestMiterlimitAndNegativeDashStayExact(t *testing.T) {
 		}
 	}
 }
+
+func TestBBoxRelativeGeometryStaysExact(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// Stop offsets are fractions of the gradient vector.
+		{`<svg><linearGradient><stop offset=".4996"/></linearGradient></svg>`,
+			`<svg><linearGradient><stop offset=".4996"/></linearGradient></svg>`},
+		// objectBoundingBox (the default) makes gradient and pattern
+		// geometry a fraction of the painted element's box.
+		{`<svg><linearGradient x1=".12345" x2="1"/></svg>`,
+			`<svg><linearGradient x1=".12345" x2="1"/></svg>`},
+		{`<svg><pattern width=".333333" height="1"/></svg>`,
+			`<svg><pattern width=".333333" height="1"/></svg>`},
+		// userSpaceOnUse is absolute geometry: rounded like coordinates.
+		{`<svg><linearGradient gradientUnits="userSpaceOnUse" x1="0.12345" x2="1.0"/></svg>`,
+			`<svg><linearGradient gradientUnits="userSpaceOnUse" x1=".123" x2="1"/></svg>`},
+	}
+	for _, tc := range cases {
+		if got := runPresentation(t, tc.in, 3); got != tc.want {
+			t.Errorf("presentation(%q)\n got: %q\nwant: %q", tc.in, got, tc.want)
+		}
+	}
+}
