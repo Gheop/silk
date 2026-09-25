@@ -236,3 +236,25 @@ func TestEntityExpansionIsBounded(t *testing.T) {
 		t.Errorf("small entity not resolved: %q %v", v, ok)
 	}
 }
+
+func TestSerializeKeepsWhitespaceReferences(t *testing.T) {
+	// XML normalizes literal newlines and tabs in attribute values to
+	// spaces, so a value carrying them (from &#10; and &#9;) must be
+	// written back as references when the tag is re-serialized.
+	doc, err := Parse([]byte("<svg\n  aria-label=\"a&#10;b&#9;c\"><path d=\"M0 0\"/></svg>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Children[0].CanonicalizeStartTag()
+	got := string(Serialize(doc))
+	if want := `<svg aria-label="a&#10;b&#9;c"><path d="M0 0"/></svg>`; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	again, err := Parse([]byte(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := again.Children[0].AttrValue("aria-label"); v != "a\nb\tc" {
+		t.Errorf("re-parsed value %q", v)
+	}
+}

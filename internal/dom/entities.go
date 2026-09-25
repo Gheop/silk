@@ -124,6 +124,12 @@ func escapeAttrTo(b *bytes.Buffer, v string) {
 			ent = "&lt;"
 		case '"':
 			ent = "&quot;"
+		case '\n':
+			ent = "&#10;" // a literal newline would be normalized to a space on re-parse
+		case '\t':
+			ent = "&#9;"
+		case '\r':
+			ent = "&#13;"
 		default:
 			continue
 		}
