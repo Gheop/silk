@@ -226,6 +226,13 @@ entity limits), one loses its entire background (a dark textured infographic
 comes back white, 73 % of pixels wrong), and seven exceed the pixel
 tolerance, mostly dashed and hairline line art.
 
+Speed, same machine, single run: silk optimizes the 90-file `formats`
+subset in about 2.6 s in-process (Go API) against about 28 s for svgo
+(Node API, startup excluded). CLI to CLI, one process per file, it is
+4.1 s against 59 s; Node's ~300 ms startup dominates on small icons
+(5 ms against 313 ms for a 6 KiB file). svgo runs single-pass by default,
+silk multipass, so the gap is measured against silk doing more work.
+
 ### Where the remaining median gap comes from
 
 svgo's per-file median edge (1.3 points) is concentrated in passes silk
