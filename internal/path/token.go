@@ -191,19 +191,25 @@ func (s *scanner) digits() int {
 
 func (s *scanner) number() (float64, error) {
 	start := s.pos
+	neg := false
 	if c := s.peek(); c == '+' || c == '-' {
+		neg = c == '-'
 		s.pos++
 	}
-	intDigits := s.digits()
+	var mant uint64
+	exact := true
+	intDigits := s.digitsAcc(&mant, &exact)
 	fracDigits := 0
 	if s.peek() == '.' {
 		s.pos++
-		fracDigits = s.digits()
+		fracDigits = s.digitsAcc(&mant, &exact)
 	}
 	if intDigits == 0 && fracDigits == 0 {
 		return 0, s.errf("expected number")
 	}
+	hasExp := false
 	if c := s.peek(); c == 'e' || c == 'E' {
+		hasExp = true
 		s.pos++
 		if c := s.peek(); c == '+' || c == '-' {
 			s.pos++
@@ -211,6 +217,21 @@ func (s *scanner) number() (float64, error) {
 		if s.digits() == 0 {
 			return 0, s.errf("exponent without digits")
 		}
+	}
+	// Fast path, bit-identical to strconv: a mantissa below 2^53 and a
+	// power of ten up to 1e22 are both exact in float64, so one correctly
+	// rounded division yields the correctly rounded result strconv would.
+	// The scan above already validated the syntax; this spares a second
+	// scan of every coordinate.
+	if exact && !hasExp && mant < 1<<53 && fracDigits <= 22 {
+		v := float64(mant)
+		if fracDigits > 0 {
+			v /= pow10f[fracDigits]
+		}
+		if neg {
+			v = -v
+		}
+		return v, nil
 	}
 	text := s.d[start:s.pos]
 	// Renderers accept a trailing dot ("5."); strconv wants digits or none.
@@ -223,6 +244,26 @@ func (s *scanner) number() (float64, error) {
 	}
 	return v, nil
 }
+
+// digitsAcc consumes digits like digits, accumulating their value into mant;
+// exact is cleared once the accumulation could no longer be trusted.
+func (s *scanner) digitsAcc(mant *uint64, exact *bool) int {
+	n := 0
+	for !s.eof() && s.d[s.pos] >= '0' && s.d[s.pos] <= '9' {
+		if *mant < 1e18 {
+			*mant = *mant*10 + uint64(s.d[s.pos]-'0')
+		} else {
+			*exact = false
+		}
+		s.pos++
+		n++
+	}
+	return n
+}
+
+// pow10f[n] = 10^n, exact in float64 up to 1e22.
+var pow10f = [...]float64{1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+	1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22}
 
 // flag reads an arc flag: exactly one '0' or '1', no sign, no fraction.
 func (s *scanner) flag() (float64, error) {
