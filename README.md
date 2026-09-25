@@ -31,7 +31,7 @@ if err != nil {
 
 ## Installation
 
-silk needs Go 1.25 or later.
+silk needs Go 1.26 or later.
 
 ### Go module
 
@@ -355,7 +355,7 @@ MIT — see [LICENSE](LICENSE).
   attributions in `testdata/corpus/README.md`); previously they only ran
   against a private corpus on the maintainer's machine.
 - CI installs resvg from a pinned, checksum-verified release with retries,
-  and tests on both the declared minimum Go (1.25) and current stable.
+  and tests on both the declared minimum Go (1.26) and current stable.
   An allocation budget test fails the suite on regressions.
 - Fixed: the CLI exits non-zero when writing its output fails (a closed
   pipe or full disk used to yield a truncated document with exit 0); the

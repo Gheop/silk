@@ -33,7 +33,7 @@ jobs:
       matrix:
         # Oldest supported (go.mod) and current stable: the declared
         # minimum stays honest instead of only ever compiling on latest.
-        go: ['1.25', 'stable']
+        go: ['1.26', 'stable']
     steps:
       - uses: actions/checkout@v7
         with:
