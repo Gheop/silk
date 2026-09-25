@@ -61,8 +61,8 @@ The image is published to two registries. Each release tag `vX.Y.Z`
 publishes `X.Y.Z` and updates `latest`:
 
 ```
-docker pull ghcr.io/gheop/silk:0.6.2
-docker pull registry.gitlab.com/gheop/silk:0.6.2
+docker pull ghcr.io/gheop/silk:0.7.0
+docker pull registry.gitlab.com/gheop/silk:0.7.0
 ```
 
 The image is built from `scratch` and contains only the static binary.
@@ -105,7 +105,7 @@ The container reads stdin and writes stdout. Pass CLI flags after the
 image name:
 
 ```
-docker run -i ghcr.io/gheop/silk:0.6.2 -precision 2 < input.svg > output.svg
+docker run -i ghcr.io/gheop/silk:0.7.0 -precision 2 < input.svg > output.svg
 ```
 
 ## Configuration
@@ -278,8 +278,18 @@ display are counted. At most
 0.5 % may carry the smaller anti-aliasing shifts. Any corpus file beyond
 that fails the suite.
 
+A headless Chrome gives a second opinion on `testdata/semantic`, a small
+corpus built around behaviours where a browser and resvg disagree or that
+resvg does not exercise: markers on basic shapes, a `<g>` inside
+`<clipPath>`, CSS `clip-path: inset()`, threshold properties such as
+`stroke-miterlimit`, nested viewports. Each file is checked with both
+renderers; the browser is the reference. Behaviours no rasterizer can show
+(animations, scripts, sprite sheets, titles) are covered by unit tests on
+the passes instead.
+
 ```
-# resvg must be on PATH (tests skip cleanly without it)
+# resvg must be on PATH; Chrome or Chromium is picked up when present
+# (tests skip cleanly without either, SILK_CHROME overrides the lookup)
 go test ./...
 ```
 
@@ -295,9 +305,10 @@ run.
 
 Fuzzing: `go test -fuzz=FuzzOptimize .` exercises the whole optimizer;
 `go test -fuzz=FuzzParse ./internal/path/` exercises the path grammar. CI
-(GitHub Actions and GitLab) runs `gofmt`, `go vet`, the test suite, and a
-20-second fuzz smoke on every push; a `v*` tag builds and publishes the
-container images to both registries.
+(GitHub Actions) runs `gofmt`, `go vet`, the test suite with both
+renderers, the race detector and a 20-second fuzz smoke on every push; a
+`v*` tag also runs the suite on GitLab and publishes the container images
+to both registries.
 
 [resvg]: https://github.com/linebender/resvg
 
@@ -329,6 +340,57 @@ SILK_CORPUS=/path/to/your/svgs go test ./...
 MIT — see [LICENSE](LICENSE).
 
 ## Changelog
+
+### v0.7.0 — Rendering guards from a full audit, hostile-input bounds, browser fidelity check (2026-09-25)
+
+- Fixed: merging two paths dropped the absorbed path's children
+  (`<title>`, `<desc>`, animations) and extended an animation over the
+  merged geometry. Paths with children are no longer merged.
+- Fixed: a `<g>` inside `<clipPath>` was unwrapped; browsers ignore a
+  group there, so an empty clip became a visible one.
+- Fixed: a `<rect>` under `marker-*` properties was converted to a path,
+  which made browsers draw the markers on it.
+- Fixed: `clip-path`, `mask` and `filter` in CSS syntax (`inset()`,
+  `blur()`...) no longer allow a merge; they resolve against the element's
+  own box like `url()` references do. Same for `vector-effect`.
+- Fixed: unreferenced `<symbol>` elements were deleted from `<defs>`; a
+  sprite sheet is addressed from other documents, so they now stay.
+- Fixed: SMIL animations are part of the safety analysis: animated
+  `href`/`values` count as id references, an animated stroke keeps
+  zero-length segments, animated markers and dashes pin precision, and
+  inherited defaults survive under an animated ancestor.
+- Fixed: a `<script>` element or an event handler attribute now freezes
+  every structural pass (defs pruning, group collapsing, path merging,
+  style-to-attribute rewriting), like a stylesheet does.
+- Fixed: `stroke-miterlimit` is reformatted exactly (it is a threshold:
+  1.9996 rounded to 2 turned a bevel into a miter spike), and a negative
+  dash entry written with commas is detected like one written with spaces.
+- Fixed: stop offsets, gradient and pattern geometry in bounding-box units
+  and `gradientTransform` translations are kept exact; a rounding there
+  scaled with the painted element.
+- Fixed: nested `<svg>` viewports with a viewBox and inline CSS transforms
+  now raise coordinate precision like `transform` attributes do; group
+  attributes are no longer pushed onto a nested viewport.
+- Fixed: a smooth curve kept after a converted arc run could reflect the
+  wrong control point; coordinates beyond 1e15 are rejected instead of
+  overflowing to `+Inf` in the output; an overflowing transform matrix is
+  left as authored.
+- Fixed: `&#10;`, `&#9;` and `&#13;` in attribute values survive
+  re-serialization; a processing instruction closed like an element is a
+  parse error instead of vanishing.
+- Hostile input: entity expansion is bounded (156 KiB of input took 4.6 GB
+  of memory), unwrapping thousands of sibling groups is linear (50 000
+  groups: 11 s → 0.6 s), arc conversion is skipped on stroked paths where
+  it could never succeed (a 5 000-cubic stroked circle: 18 s → 0.03 s),
+  and long collinear runs fold in linear time (100 000 vertices: 25 s →
+  50 ms). `MaxPasses` is capped at 64.
+- Testing: a headless Chrome renders `testdata/semantic` alongside resvg
+  (it catches the marker, clipPath and `inset()` cases resvg cannot), the
+  race detector runs in CI, and the allocation budget is measured on the
+  committed corpus whatever `SILK_CORPUS` points at.
+- Minimum Go is 1.26; the container image runs unprivileged; `-h` exits 0.
+- Output on the reference corpus grows by 0.08 % from the refused merges
+  and the exact gradient geometry.
 
 ### v0.6.2 — Faster number handling, byte-identical output (2026-09-25)
 
