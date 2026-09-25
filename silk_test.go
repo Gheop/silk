@@ -302,3 +302,30 @@ func TestAllocationBudget(t *testing.T) {
 		t.Errorf("B/op regressed: %d > budget %d", b, maxBytes)
 	}
 }
+
+// The semantic gate: documents built around behaviours where a browser and
+// resvg disagree, or that resvg does not exercise (markers on basic shapes,
+// invalid clipPath content, CSS clip-path syntax, threshold properties).
+// Each is checked with both renderers; the browser is the reference.
+func TestSemanticCorpus(t *testing.T) {
+	files, _ := filepath.Glob("testdata/semantic/*.svg")
+	if len(files) == 0 {
+		t.Fatal("no semantic corpus")
+	}
+	opts := DefaultOptions()
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			t.Parallel()
+			in, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := Optimize(in, opts)
+			if err != nil {
+				t.Fatalf("Optimize: %v", err)
+			}
+			t.Run("resvg", func(t *testing.T) { fidelity.Compare(t, filepath.Base(f), in, out) })
+			t.Run("chrome", func(t *testing.T) { fidelity.CompareChrome(t, filepath.Base(f), in, out) })
+		})
+	}
+}

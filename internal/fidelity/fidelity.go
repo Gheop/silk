@@ -1,6 +1,9 @@
 // Package fidelity proves optimizations correct by rendering: original and
-// optimized documents are rasterized with resvg and compared pixel by pixel.
-// The renderer is a test-only dependency; tests skip cleanly when absent.
+// optimized documents are rasterized and compared pixel by pixel. resvg is
+// the primary renderer; a headless Chrome is the second opinion, because a
+// browser differs from resvg exactly where SVG semantics get subtle (markers
+// on basic shapes, invalid clipPath content, CSS clip-path syntax). Both are
+// test-only dependencies; tests skip cleanly when absent.
 package fidelity
 
 import (
@@ -65,8 +68,79 @@ func ResvgPath() string {
 	return p
 }
 
-// RenderDiff rasterizes both documents and measures their pixel difference.
+// A Renderer rasterizes svg into dir under the given base name.
+type Renderer func(dir, name string, svg []byte) (*image.NRGBA, error)
+
+// Resvg renders with the resvg command.
+func Resvg(dir, name string, svg []byte) (*image.NRGBA, error) { return render(dir, name, svg) }
+
+// ChromePath returns a headless-capable Chrome or Chromium binary, or ""
+// when none is available. SILK_CHROME overrides the lookup.
+func ChromePath() string {
+	if p := os.Getenv("SILK_CHROME"); p != "" {
+		return p
+	}
+	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// Chrome renders with a headless Chrome: the document is shown through an
+// <img> fitted into a fixed square canvas on a transparent page, so two
+// documents of the same intrinsic size land on the same pixels.
+func Chrome(dir, name string, svg []byte) (*image.NRGBA, error) {
+	chrome := ChromePath()
+	if chrome == "" {
+		return nil, fmt.Errorf("chrome: not installed")
+	}
+	in := filepath.Join(dir, name+".svg")
+	page := filepath.Join(dir, name+".html")
+	out := filepath.Join(dir, name+"-chrome.png")
+	if err := os.WriteFile(in, svg, 0o600); err != nil {
+		return nil, err
+	}
+	html := `<!doctype html><html><head><meta charset="utf-8"><style>` +
+		`html,body{margin:0;background:transparent}` +
+		`img{display:block;width:` + fmt.Sprint(renderWidth) + `px;height:` + fmt.Sprint(renderWidth) + `px;object-fit:contain;object-position:0 0}` +
+		`</style></head><body><img src="` + name + `.svg"></body></html>`
+	if err := os.WriteFile(page, []byte(html), 0o600); err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(chrome,
+		"--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
+		"--no-first-run", "--disable-extensions",
+		"--user-data-dir="+filepath.Join(dir, name+"-profile"),
+		"--default-background-color=00000000",
+		// Under CPU contention the screenshot can fire before the image
+		// has painted; a virtual-time budget makes Chrome wait for the
+		// page to settle first.
+		"--virtual-time-budget=5000",
+		fmt.Sprintf("--window-size=%d,%d", renderWidth, renderWidth),
+		"--screenshot="+out, "file://"+page)
+	// A browser per render is heavy: a few at a time is faster overall
+	// than a dozen fighting for cores, and keeps the screenshots reliable.
+	chromeSlots <- struct{}{}
+	msg, err := cmd.CombinedOutput()
+	<-chromeSlots
+	if err != nil {
+		return nil, fmt.Errorf("chrome: %v: %s", err, msg)
+	}
+	return readPNG(out)
+}
+
+var chromeSlots = make(chan struct{}, 2)
+
+// RenderDiff rasterizes both documents with resvg and measures their pixel
+// difference.
 func RenderDiff(dir string, original, optimized []byte) (Result, error) {
+	return RenderDiffWith(Resvg, dir, original, optimized)
+}
+
+// RenderDiffWith is RenderDiff with an explicit renderer.
+func RenderDiffWith(render Renderer, dir string, original, optimized []byte) (Result, error) {
 	a, err := render(dir, "a", original)
 	if err != nil {
 		return Result{}, fmt.Errorf("render original: %w", err)
@@ -171,6 +245,10 @@ func render(dir, name string, svg []byte) (*image.NRGBA, error) {
 	if msg, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("resvg: %v: %s", err, msg)
 	}
+	return readPNG(out)
+}
+
+func readPNG(out string) (*image.NRGBA, error) {
 	f, err := os.Open(out)
 	if err != nil {
 		return nil, err
@@ -192,12 +270,27 @@ func Compare(t *testing.T, name string, original, optimized []byte) {
 	if ResvgPath() == "" {
 		t.Skip("resvg not installed; skipping fidelity check")
 	}
-	res, err := RenderDiff(t.TempDir(), original, optimized)
+	compareWith(t, Resvg, "resvg", name, original, optimized)
+}
+
+// CompareChrome is Compare through a headless Chrome. It skips when none is
+// installed.
+func CompareChrome(t *testing.T, name string, original, optimized []byte) {
+	t.Helper()
+	if ChromePath() == "" {
+		t.Skip("chrome not installed; skipping browser fidelity check")
+	}
+	compareWith(t, Chrome, "chrome", name, original, optimized)
+}
+
+func compareWith(t *testing.T, render Renderer, renderer, name string, original, optimized []byte) {
+	t.Helper()
+	res, err := RenderDiffWith(render, t.TempDir(), original, optimized)
 	if err != nil {
 		t.Errorf("%s: %v", name, err)
 		return
 	}
 	if !res.Acceptable() {
-		t.Errorf("%s: render differs: %s", name, res)
+		t.Errorf("%s: %s render differs: %s", name, renderer, res)
 	}
 }

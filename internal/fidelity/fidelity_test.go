@@ -46,3 +46,23 @@ func TestDifferentFails(t *testing.T) {
 		t.Errorf("red vs blue accepted: %s", res)
 	}
 }
+
+func TestChromeAgreesOnBasics(t *testing.T) {
+	if ChromePath() == "" {
+		t.Skip("chrome not installed")
+	}
+	same, err := RenderDiffWith(Chrome, t.TempDir(), []byte(redRect), []byte(redRectPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !same.Acceptable() {
+		t.Errorf("equivalent renders differ in chrome: %s", same)
+	}
+	diff, err := RenderDiffWith(Chrome, t.TempDir(), []byte(redRect), []byte(blueRect))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff.Acceptable() {
+		t.Errorf("different renders accepted in chrome: %s", diff)
+	}
+}
