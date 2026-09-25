@@ -20,7 +20,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	precision := fs.Int("precision", 3, "decimal places kept for coordinates; 0 keeps exact values")
 	transformPrecision := fs.Int("transform-precision", 0, "decimal places for transform translations; 0 keeps exact values")
-	singlePass := fs.Bool("single-pass", false, "run the pipeline once instead of until stable")
+	singlePass := fs.Bool("single-pass", false, "allow at most 4 rounds to reach a stable output instead of 8")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

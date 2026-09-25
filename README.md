@@ -120,12 +120,12 @@ out, err := silk.Optimize(svgBytes, silk.Options{Precision: 3, Multipass: true})
 |---|---|---|---|
 | `Precision` | `int` | exact, no rounding | Maximum number of decimal places kept for coordinates and path data. Rounding is the biggest size lever and the main fidelity risk, so it is opt-in and bounded. |
 | `TransformPrecision` | `int` | transforms stay exact | Rounds transform translation components when > 0. By default transforms are only rewritten losslessly: rounding a group translation shifts whole subtrees coherently, which sub-pixel patterns turn into visible moiré. |
-| `Multipass` | `bool` | fewer shrinking passes | Reruns the pass pipeline until the byte length stops shrinking, bounded by `MaxPasses`. |
-| `MaxPasses` | `int` | 8 when `Multipass` is set | Upper bound on shrinking passes. |
+| `Multipass` | `bool` | at most 4 rounds | The pipeline always reruns until its output stops changing (that byte fixed point is what makes the result idempotent), up to 4 rounds. `Multipass` raises the bound to `MaxPasses`. |
+| `MaxPasses` | `int` | 8 when `Multipass` is set | Upper bound on rounds, capped at 64. |
 
 `DefaultOptions()` returns `{Precision: 3, Multipass: true}`. The zero
 value of `Options` is safe and conservative: exact numbers, no rounding,
-minimal passes.
+at most 4 rounds.
 
 ### CLI flags
 
@@ -133,7 +133,7 @@ minimal passes.
 |---|---|---|
 | `-precision N` | `3` | Decimal places kept for coordinates; `0` keeps exact values. |
 | `-transform-precision N` | `0` | Decimal places for transform translations; `0` keeps exact values. |
-| `-single-pass` | off | Run the pipeline once instead of until stable. |
+| `-single-pass` | off | Allow at most 4 rounds to reach a stable output instead of 8. |
 
 ### Environment variables
 

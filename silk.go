@@ -13,8 +13,8 @@ import (
 	"github.com/Gheop/silk/internal/pass"
 )
 
-// Options controls the optimizer. The zero value is safe and conservative
-// (no rounding, single pass).
+// Options controls the optimizer. The zero value is safe and conservative:
+// no rounding, and at most 4 rounds to reach the byte fixed point.
 type Options struct {
 	// Precision is the maximum number of decimal places kept for coordinates
 	// and path data. 0 means exact (no rounding). Rounding is the single
@@ -25,8 +25,10 @@ type Options struct {
 	// (matrices tolerate more rounding than geometry visible at 1:1).
 	TransformPrecision int
 
-	// Multipass reruns the pass pipeline until the byte length stops
-	// shrinking, bounded by MaxPasses (default 8 when Multipass is true).
+	// The pipeline always reruns until its output stops changing (that
+	// byte fixed point is what makes the result idempotent), up to 4
+	// rounds. Multipass raises the bound to MaxPasses (default 8, capped at
+	// 64) so documents that keep shrinking get the extra rounds.
 	Multipass bool
 	MaxPasses int
 }
