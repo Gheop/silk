@@ -61,6 +61,10 @@ func minimizeDecimalAt(b []byte, mark int) []byte {
 	return b
 }
 
+// pow10i[n] is the smallest n+1-digit integer: digit counting compares
+// against it instead of dividing.
+var pow10i = [...]int64{1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18}
+
 var pow10 = [16]float64{1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15}
 
 // quantize returns the float64 the formatted text of v denotes; geometry
@@ -113,11 +117,16 @@ func numInfo(v float64, prec int) (numShape, bool) {
 	if neg {
 		k = -k
 	}
-	nd, tz := 0, -1
-	for x := k; x > 0; x /= 10 {
-		if tz < 0 && x%10 != 0 {
-			tz = nd
-		}
+	// Trailing zeros first (typically none or one), then the digit count by
+	// comparison against a power table: divisions cost ~25 cycles each and
+	// this loop ran one per digit for every candidate argument.
+	tz, x := 0, k
+	for x%10 == 0 {
+		x /= 10
+		tz++
+	}
+	nd := tz + 1
+	for nd-tz < len(pow10i) && x >= pow10i[nd-tz] {
 		nd++
 	}
 	s := numShape{headMinus: neg}
