@@ -90,16 +90,24 @@ func resolveEntity(name string) (rune, bool) {
 
 // escapeAttrTo writes v escaped for a double-quoted attribute value.
 func escapeAttrTo(b *bytes.Buffer, v string) {
+	// Runs of ordinary bytes are written whole: one capacity check per run
+	// instead of one per byte, and most attribute values are a single run.
+	start := 0
 	for i := 0; i < len(v); i++ {
+		var ent string
 		switch v[i] {
 		case '&':
-			b.WriteString("&amp;")
+			ent = "&amp;"
 		case '<':
-			b.WriteString("&lt;")
+			ent = "&lt;"
 		case '"':
-			b.WriteString("&quot;")
+			ent = "&quot;"
 		default:
-			b.WriteByte(v[i])
+			continue
 		}
+		b.WriteString(v[start:i])
+		b.WriteString(ent)
+		start = i + 1
 	}
+	b.WriteString(v[start:])
 }
