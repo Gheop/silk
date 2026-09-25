@@ -160,11 +160,13 @@ func plainCharData(e *dom.Node) bool {
 
 // disposableDefs are element types inside <defs> that can only take effect
 // through an id reference. Elements that act by name or globally (<style>,
-// <font> and its face, <script>) are never candidates.
+// <font> and its face, <script>) are never candidates, and neither is
+// <symbol>: a sprite sheet is addressed from outside the document
+// (<use href="sprite.svg#icon">), so an unreferenced symbol is its purpose.
 var disposableDefs = map[string]bool{
 	"linearGradient": true, "radialGradient": true, "meshGradient": true,
 	"pattern": true, "filter": true, "clipPath": true, "mask": true,
-	"marker": true, "symbol": true, "g": true, "path": true, "rect": true,
+	"marker": true, "g": true, "path": true, "rect": true,
 	"circle": true, "ellipse": true, "line": true, "polyline": true,
 	"polygon": true, "use": true, "image": true, "text": true,
 }

@@ -122,6 +122,9 @@ func TestRemoveUnreferencedDefs(t *testing.T) {
 		// A stylesheet #id reference protects; style and font never leave.
 		{`<svg><style>#s{stroke:red}</style><defs><path id="s" d="M0 0"/><font id="f"/></defs></svg>`,
 			`<svg><style>#s{stroke:red}</style><defs><path id="s" d="M0 0"/><font id="f"/></defs></svg>`},
+		// Symbols are sprite entries used from other documents: kept.
+		{`<svg><defs><symbol id="icon"><path d="M0 0h1"/></symbol></defs></svg>`,
+			`<svg><defs><symbol id="icon"><path d="M0 0h1"/></symbol></defs></svg>`},
 		// A fully unreferenced defs empties out and disappears.
 		{`<svg><defs><clipPath id="c"><path d="M0 0h1"/></clipPath></defs><rect/></svg>`,
 			`<svg><rect/></svg>`},
