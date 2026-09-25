@@ -27,7 +27,10 @@ while IFS= read -r f; do
   in_size=$(stat -c%s "$f")
 
   t0=$(date +%s%N)
-  "$tmp/silk" "$f" > "$tmp/out_silk.svg" || continue
+  if ! "$tmp/silk" "$f" > "$tmp/out_silk.svg"; then
+    echo "silk failed on $base" >&2
+    continue
+  fi
   t1=$(date +%s%N)
   silk_ms=$(( (t1 - t0) / 1000000 ))
   silk_size=$(stat -c%s "$tmp/out_silk.svg")

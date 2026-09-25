@@ -7,4 +7,6 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /silk ./cmd/silk
 
 FROM scratch
 COPY --from=build /silk /silk
+# The binary reads stdin or a file and writes stdout: no reason to be root.
+USER 65534:65534
 ENTRYPOINT ["/silk"]

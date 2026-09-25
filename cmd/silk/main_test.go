@@ -65,3 +65,13 @@ func TestRunWriteFailureIsAnError(t *testing.T) {
 		t.Errorf("stderr should name the write failure: %s", errb.String())
 	}
 }
+
+func TestHelpExitsZero(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"-h"}, strings.NewReader(""), &out, &errb); code != 0 {
+		t.Errorf("-h exited %d, want 0", code)
+	}
+	if !strings.Contains(errb.String(), "precision") {
+		t.Errorf("usage not printed: %q", errb.String())
+	}
+}
